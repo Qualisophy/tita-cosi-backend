@@ -1,0 +1,12 @@
+# Dependencias
+node_modules/
+
+# Entorno y variables secretas
+.env
+
+# Archivos de subida (ignoramos el contenido, pero mantenemos la carpeta)
+uploads/*
+!uploads/.gitkeep
+
+# Archivos del sistema macOS
+.DS_Store
