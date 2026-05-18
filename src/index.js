@@ -6,8 +6,9 @@ import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import { rateLimit } from "express-rate-limit";
 
-// 1. IMPORTACIONES DE BASE DE DATOS Y RUTAS
+// IMPORTACIONES DE BASE DE DATOS Y RUTAS
 import pool from "./config/db.js";
+import authRoutes from "./routes/auth.routes.js";
 import categoriaRoutes from "./routes/categoria.routes.js";
 
 // Cargar variables de entorno
@@ -17,12 +18,14 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ==========================================
-// 2. CAPA DE SEGURIDAD (MIDDLEWARES)
+// CAPA DE SEGURIDAD Y PARSEADORES (MIDDLEWARES)
 // ==========================================
+
 app.use(helmet());
+
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN || "http://localhost:4321", // Conectará con tu frontend en Astro
+    origin: process.env.CORS_ORIGIN || "http://localhost:4321",
     credentials: true,
   }),
 );
@@ -35,11 +38,12 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
+// Parseadores del Body y Cookies
 app.use(express.json());
 app.use(cookieParser());
 
 // ==========================================
-// 3. RUTAS BÁSICAS Y MÓDULOS
+// RUTAS BÁSICAS Y MÓDULOS
 // ==========================================
 
 // Ruta de estado de salud (Health Check)
@@ -49,11 +53,14 @@ app.get("/api/health", (req, res) => {
     .json({ status: "OK", message: "Servidor Tita Cosi funcionando 🚀" });
 });
 
+// Autenticación (Login)
+app.use("/api/auth", authRoutes);
+
 // Módulo de Categorías
 app.use("/api/categorias", categoriaRoutes);
 
 // ==========================================
-// 4. ARRANQUE DEL SERVIDOR
+// ARRANQUE DEL SERVIDOR
 // ==========================================
 app.listen(PORT, () => {
   console.log(`✅ Servidor corriendo en http://localhost:${PORT}`);

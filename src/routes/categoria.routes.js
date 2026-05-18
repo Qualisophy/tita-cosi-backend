@@ -1,16 +1,16 @@
-// src/routes/categoria.routes.js
 import { Router } from "express";
 import {
   getCategorias,
   createCategoria,
 } from "../controllers/categoria.controller.js";
+import { verificarToken } from "../middlewares/auth.middleware.js";
 
 const router = Router();
 
-// GET /api/categorias
+// Cualquiera puede ver las categorías (Público)
 router.get("/", getCategorias);
 
-// POST /api/categorias
-router.post("/", createCategoria);
+// SOLO los admins con token pueden crear categorías (Protegido)
+router.post("/", verificarToken, createCategoria);
 
 export default router;
