@@ -10,7 +10,6 @@ const pool = mysql.createPool({
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-  // Le decimos que si estamos en producción (leyendo la variable DB_SSL), active la conexión segura
   ssl:
     process.env.DB_SSL === "true" ? { rejectUnauthorized: false } : undefined,
   waitForConnections: true,
