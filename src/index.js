@@ -5,11 +5,14 @@ import cors from "cors";
 import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import { rateLimit } from "express-rate-limit";
+import path from "path";
+import { fileURLToPath } from "url";
 
 // IMPORTACIONES DE BASE DE DATOS Y RUTAS
 import pool from "./config/db.js";
 import authRoutes from "./routes/auth.routes.js";
 import categoriaRoutes from "./routes/categoria.routes.js";
+import productoRoutes from "./routes/producto.routes.js"; // <-- Importamos las rutas de productos
 
 // Cargar variables de entorno
 dotenv.config();
@@ -17,11 +20,16 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Configuración de rutas absolutas para ES Modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 // ==========================================
 // CAPA DE SEGURIDAD Y PARSEADORES (MIDDLEWARES)
 // ==========================================
 
-app.use(helmet());
+// IMPORTANTE: Permitir cargar imágenes locales cross-origin
+app.use(helmet({ crossOriginResourcePolicy: false }));
 
 app.use(
   cors({
@@ -42,6 +50,10 @@ app.use(limiter);
 app.use(express.json());
 app.use(cookieParser());
 
+// Carpeta pública para servir las imágenes subidas
+// Cuando el frontend pida /uploads/foto.jpg, Express buscará en la carpeta local uploads
+app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
+
 // ==========================================
 // RUTAS BÁSICAS Y MÓDULOS
 // ==========================================
@@ -58,6 +70,9 @@ app.use("/api/auth", authRoutes);
 
 // Módulo de Categorías
 app.use("/api/categorias", categoriaRoutes);
+
+// Módulo de Productos
+app.use("/api/productos", productoRoutes);
 
 // ==========================================
 // ARRANQUE DEL SERVIDOR
