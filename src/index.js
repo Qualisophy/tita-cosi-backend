@@ -12,7 +12,8 @@ import { fileURLToPath } from "url";
 import pool from "./config/db.js";
 import authRoutes from "./routes/auth.routes.js";
 import categoriaRoutes from "./routes/categoria.routes.js";
-import productoRoutes from "./routes/producto.routes.js"; // <-- Importamos las rutas de productos
+import productoRoutes from "./routes/producto.routes.js";
+import reservaRoutes from "./routes/reserva.routes.js";
 
 // Cargar variables de entorno
 dotenv.config();
@@ -73,6 +74,9 @@ app.use("/api/categorias", categoriaRoutes);
 
 // Módulo de Productos
 app.use("/api/productos", productoRoutes);
+
+// Módulo de Reservas
+app.use("/api/reservas", reservaRoutes);
 
 // ==========================================
 // ARRANQUE DEL SERVIDOR
