@@ -41,10 +41,10 @@ export const login = async (req, res) => {
 
     // 4. Inyectamos el token en una Cookie HTTP-Only
     res.cookie("token", token, {
-      httpOnly: true, // El JavaScript del frontend no puede leerla (Previene ataques XSS)
-      secure: process.env.NODE_ENV === "production", // En producción (Render) exige HTTPS
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax", // Permite cruce de dominios en prod
-      maxAge: 8 * 60 * 60 * 1000, // 8 horas en milisegundos
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      maxAge: 8 * 60 * 60 * 1000,
     });
 
     // 5. Devolvemos la confirmación al frontend SIN el token en el cuerpo
@@ -58,4 +58,14 @@ export const login = async (req, res) => {
       .status(500)
       .json({ message: "Error interno en el servidor al hacer login" });
   }
+};
+
+export const logout = (req, res) => {
+  // Limpiamos la cookie que contiene el token
+  res.clearCookie("token", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict", // o "none" si tu front y back están en dominios muy distintos y tienes problemas
+  });
+  res.json({ message: "Sesión cerrada correctamente" });
 };
