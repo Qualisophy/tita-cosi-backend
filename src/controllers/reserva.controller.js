@@ -5,12 +5,18 @@ import Reserva from "../models/reserva.model.js";
 export const getReservas = async (req, res) => {
   try {
     const reservas = await Reserva.getAll();
-    res.json(reservas);
+    res.json({
+      success: true,
+      data: reservas,
+      message: "Reservas obtenidas correctamente",
+    });
   } catch (error) {
     console.error("Error obteniendo reservas:", error);
-    res
-      .status(500)
-      .json({ message: "Error interno del servidor al obtener las reservas" });
+    res.status(500).json({
+      success: false,
+      data: null,
+      message: "Error interno del servidor al obtener las reservas",
+    });
   }
 };
 
@@ -21,13 +27,19 @@ export const getReservaById = async (req, res) => {
     const reserva = await Reserva.getById(id);
 
     if (!reserva) {
-      return res.status(404).json({ message: "Reserva no encontrada" });
+      return res
+        .status(404)
+        .json({ success: false, data: null, message: "Reserva no encontrada" });
     }
 
-    res.json(reserva);
+    res.json({ success: true, data: reserva, message: "Reserva obtenida" });
   } catch (error) {
     console.error("Error obteniendo reserva:", error);
-    res.status(500).json({ message: "Error interno al obtener la reserva" });
+    res.status(500).json({
+      success: false,
+      data: null,
+      message: "Error interno al obtener la reserva",
+    });
   }
 };
 
@@ -36,29 +48,34 @@ export const createReserva = async (req, res) => {
   try {
     const { fecha, hora, mesa_id } = req.body;
 
-    // 1. Verificación vital: ¿Está la mesa libre ese día y a esa hora?
     const isAvailable = await Reserva.checkAvailability(fecha, hora, mesa_id);
 
     if (!isAvailable) {
       return res.status(400).json({
+        success: false,
+        data: null,
         message:
           "Lo sentimos, esa mesa ya está reservada para esa fecha y hora.",
       });
     }
 
-    // 2. Si está libre, la creamos
     const id = await Reserva.create(req.body);
     res.status(201).json({
+      success: true,
+      data: { reservaId: id },
       message: "Reserva confirmada con éxito",
-      reservaId: id,
     });
   } catch (error) {
     console.error("Error creando reserva:", error);
-    res.status(500).json({ message: "Error interno al procesar tu reserva" });
+    res.status(500).json({
+      success: false,
+      data: null,
+      message: "Error interno al procesar tu reserva",
+    });
   }
 };
 
-// [CRM] Actualizar una reserva (ej. cambiar el estado a "Confirmada" o "Completada")
+// [CRM] Actualizar una reserva
 export const updateReserva = async (req, res) => {
   try {
     const { id } = req.params;
@@ -66,19 +83,29 @@ export const updateReserva = async (req, res) => {
     const actualizado = await Reserva.update(id, req.body);
 
     if (!actualizado) {
-      return res
-        .status(404)
-        .json({ message: "Reserva no encontrada o no se pudo actualizar" });
+      return res.status(404).json({
+        success: false,
+        data: null,
+        message: "Reserva no encontrada o no se pudo actualizar",
+      });
     }
 
-    res.json({ message: "Reserva actualizada con éxito" });
+    res.json({
+      success: true,
+      data: null,
+      message: "Reserva actualizada con éxito",
+    });
   } catch (error) {
     console.error("Error actualizando reserva:", error);
-    res.status(500).json({ message: "Error interno al actualizar la reserva" });
+    res.status(500).json({
+      success: false,
+      data: null,
+      message: "Error interno al actualizar la reserva",
+    });
   }
 };
 
-// [CRM] Eliminar una reserva (Borrado físico)
+// [CRM] Eliminar una reserva
 export const deleteReserva = async (req, res) => {
   try {
     const { id } = req.params;
@@ -86,16 +113,24 @@ export const deleteReserva = async (req, res) => {
     const eliminado = await Reserva.delete(id);
 
     if (!eliminado) {
-      return res
-        .status(404)
-        .json({ message: "Reserva no encontrada o ya ha sido eliminada" });
+      return res.status(404).json({
+        success: false,
+        data: null,
+        message: "Reserva no encontrada o ya ha sido eliminada",
+      });
     }
 
-    res.json({ message: "Reserva eliminada con éxito de la base de datos" });
+    res.json({
+      success: true,
+      data: null,
+      message: "Reserva eliminada con éxito de la base de datos",
+    });
   } catch (error) {
     console.error("Error eliminando reserva:", error);
-    res
-      .status(500)
-      .json({ message: "Error interno al intentar eliminar la reserva" });
+    res.status(500).json({
+      success: false,
+      data: null,
+      message: "Error interno al intentar eliminar la reserva",
+    });
   }
 };
