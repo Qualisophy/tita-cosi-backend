@@ -43,7 +43,7 @@ export const getReservaById = async (req, res) => {
   }
 };
 
-// [WEB/CRM] Crear una nueva reserva
+// Crear una nueva reserva
 export const createReserva = async (req, res) => {
   try {
     const { fecha, hora, mesa_id } = req.body;
@@ -59,7 +59,39 @@ export const createReserva = async (req, res) => {
       });
     }
 
+    // 1. Crear la reserva en BBDD
     const id = await Reserva.create(req.body);
+
+    const makeWebhookUrl = process.env.MAKE_WEBHOOK_RESERVA_URL;
+
+    if (makeWebhookUrl) {
+      // Construimos el payload exacto para Make
+      const payloadMake = {
+        reservaId: id,
+        nombre_cliente: req.body.nombre_cliente,
+        email_cliente: req.body.email_cliente,
+        telefono_cliente: req.body.telefono_cliente,
+        fecha: req.body.fecha,
+        hora: req.body.hora,
+        comensales: req.body.comensales,
+        mesa_id: req.body.mesa_id,
+        zona: req.body.zona,
+        notas: req.body.notas || "Sin peticiones especiales",
+      };
+
+      fetch(makeWebhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payloadMake),
+      }).catch((err) => {
+        console.error(
+          "Error al enviar webhook de reserva a Make:",
+          err.message,
+        );
+      });
+    }
+
+    // 3. Respuesta final al cliente
     res.status(201).json({
       success: true,
       data: { reservaId: id },
@@ -74,7 +106,6 @@ export const createReserva = async (req, res) => {
     });
   }
 };
-
 // [CRM] Actualizar una reserva
 export const updateReserva = async (req, res) => {
   try {
