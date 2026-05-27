@@ -82,7 +82,10 @@ export const createReserva = async (req, res) => {
       fetch(makeWebhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payloadMake),
+        body: JSON.stringify({
+          ...payloadMake,
+          tipo_formulario: "reserva", // <-- Ahora sí viaja dentro de los datos
+        }),
       }).catch((err) => {
         console.error(
           "Error al enviar webhook de reserva a Make:",
