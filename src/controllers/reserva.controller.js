@@ -54,18 +54,15 @@ export const createReserva = async (req, res) => {
       return res.status(400).json({
         success: false,
         data: null,
-        message:
-          "Lo sentimos, esa mesa ya está reservada para esa fecha y hora.",
+        message: "Lo sentimos, esa mesa ya está reservada en esa fecha y hora.",
       });
     }
 
-    // 1. Crear la reserva en BBDD
     const id = await Reserva.create(req.body);
 
     const makeWebhookUrl = process.env.MAKE_WEBHOOK_RESERVA_URL;
 
     if (makeWebhookUrl) {
-      // Construimos el payload exacto para Make
       const payloadMake = {
         reservaId: id,
         nombre_cliente: req.body.nombre_cliente,
@@ -84,7 +81,7 @@ export const createReserva = async (req, res) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...payloadMake,
-          tipo_formulario: "reserva", // <-- Ahora sí viaja dentro de los datos
+          tipo_formulario: "reserva",
         }),
       }).catch((err) => {
         console.error(
@@ -94,7 +91,6 @@ export const createReserva = async (req, res) => {
       });
     }
 
-    // 3. Respuesta final al cliente
     res.status(201).json({
       success: true,
       data: { reservaId: id },
@@ -109,10 +105,31 @@ export const createReserva = async (req, res) => {
     });
   }
 };
+
 // [CRM] Actualizar una reserva
 export const updateReserva = async (req, res) => {
   try {
     const { id } = req.params;
+    const { fecha, hora, mesa_id, estado } = req.body;
+
+    // VALIDACIÓN AÑADIDA: Verificamos si la nueva mesa/hora está libre (excluyendo la propia reserva)
+    if (estado !== "Cancelada") {
+      const isAvailable = await Reserva.checkAvailability(
+        fecha,
+        hora,
+        mesa_id,
+        id,
+      );
+
+      if (!isAvailable) {
+        return res.status(400).json({
+          success: false,
+          data: null,
+          message:
+            "No se puede guardar: La mesa está ocupada por otra reserva en esa fecha y hora.",
+        });
+      }
+    }
 
     const actualizado = await Reserva.update(id, req.body);
 
@@ -143,7 +160,6 @@ export const updateReserva = async (req, res) => {
 export const deleteReserva = async (req, res) => {
   try {
     const { id } = req.params;
-
     const eliminado = await Reserva.delete(id);
 
     if (!eliminado) {

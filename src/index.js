@@ -33,9 +33,23 @@ const __dirname = path.dirname(__filename);
 // IMPORTANTE: Permitir cargar imágenes locales cross-origin
 app.use(helmet({ crossOriginResourcePolicy: false }));
 
+// [SOLUCIÓN CORS]: Lista blanca para aceptar local (IPv4/IPv6) y producción dinámicamente
+const allowedOrigins = [
+  "http://localhost:4321",
+  "http://127.0.0.1:4321",
+  "https://tita-cosi.vercel.app",
+  process.env.CORS_ORIGIN,
+];
+
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN || "http://localhost:4321",
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Bloqueado por CORS"));
+      }
+    },
     credentials: true,
   }),
 );
@@ -53,7 +67,6 @@ app.use(express.json());
 app.use(cookieParser());
 
 // Carpeta pública para servir las imágenes subidas
-// Cuando el frontend pida /uploads/foto.jpg, Express buscará en la carpeta local uploads
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
 // ==========================================
@@ -85,6 +98,10 @@ app.use("/api/contacto", contactoRoutes);
 // ==========================================
 // ARRANQUE DEL SERVIDOR
 // ==========================================
-app.listen(PORT, () => {
-  console.log(`✅ Servidor corriendo en http://localhost:${PORT}`);
+
+// [SOLUCIÓN RED]: '0.0.0.0' fuerza a Node a exponer el puerto en todas las interfaces IPv4
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(
+    `✅ Servidor corriendo en el puerto ${PORT} (Accesible vía 127.0.0.1 y localhost)`,
+  );
 });

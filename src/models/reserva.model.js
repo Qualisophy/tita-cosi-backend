@@ -1,8 +1,8 @@
 // src/models/reserva.model.js
-import db from "../config/db.js"; // O la ruta exacta a tu configuración de conexión de base de datos
+import db from "../config/db.js";
 
 const Reserva = {
-  // 1. Listar todas las reservas (Para la vista principal del CRM)
+  // 1. Listar todas las reservas
   getAll: async () => {
     const [rows] = await db.query(
       "SELECT * FROM reservas ORDER BY fecha DESC, hora DESC",
@@ -10,13 +10,13 @@ const Reserva = {
     return rows;
   },
 
-  // 2. Obtener una reserva por ID (Para ver el detalle o cargar el formulario de edición)
+  // 2. Obtener una reserva por ID
   getById: async (id) => {
     const [rows] = await db.query("SELECT * FROM reservas WHERE id = ?", [id]);
     return rows[0];
   },
 
-  // 3. Crear una nueva reserva (Desde el front del cliente o manualmente desde el CRM)
+  // 3. Crear una nueva reserva
   create: async (datosReserva) => {
     const {
       nombre_cliente,
@@ -50,7 +50,7 @@ const Reserva = {
     return result.insertId || result.affectedRows;
   },
 
-  // 4. Editar/Actualizar una reserva existente (Para cambiar el estado, la mesa, etc., desde el CRM)
+  // 4. Editar/Actualizar una reserva existente
   update: async (id, datosActualizados) => {
     const {
       nombre_cliente,
@@ -96,17 +96,32 @@ const Reserva = {
     return result.affectedRows > 0;
   },
 
-  // 5. Verificar disponibilidad (Vital para evitar que dos personas reserven la misma mesa el mismo día y hora)
-  checkAvailability: async (fecha, hora, mesa_id) => {
-    const [rows] = await db.query(
-      `SELECT * FROM reservas 
-      WHERE fecha = ? AND hora = ? AND mesa_id = ? AND estado != 'Cancelada'`,
-      [fecha, hora, mesa_id],
-    );
+  // 5. Verificar disponibilidad (AHORA SOPORTA EXCLUSIÓN DE ID PARA EDICIONES)
+  checkAvailability: async (fecha, hora, mesa_id, exclude_id = null) => {
+    // Normalizar hora para que coincida de forma estricta con MySQL TIME
+    const horaFormat = hora.length === 5 ? `${hora}:00` : hora;
+
+    let query = `SELECT id FROM reservas 
+                 WHERE DATE(fecha) = DATE(?) 
+                 AND TIME(hora) = TIME(?) 
+                 AND mesa_id = ? 
+                 AND estado != 'Cancelada'`;
+
+    const params = [fecha, horaFormat, mesa_id];
+
+    // Si estamos editando, excluimos la reserva actual para que no choque consigo misma
+    if (exclude_id) {
+      query += ` AND id != ?`;
+      params.push(exclude_id);
+    }
+
+    const [rows] = await db.query(query, params);
+
+    // Devuelve true si no hay resultados (está libre)
     return rows.length === 0;
   },
 
-  // 6. Eliminar una reserva físicamente de la base de datos
+  // 6. Eliminar una reserva
   delete: async (id) => {
     const [result] = await db.query("DELETE FROM reservas WHERE id = ?", [id]);
     return result.affectedRows > 0;
