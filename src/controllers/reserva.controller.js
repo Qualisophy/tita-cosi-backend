@@ -1,6 +1,58 @@
 // src/controllers/reserva.controller.js
 import Reserva from "../models/reserva.model.js";
 
+// Función helper centralizada para validar las reglas de negocio del establecimiento
+const validarReglasNegocio = (datos) => {
+  const { fecha, hora, comensales, notas } = datos;
+
+  // 1. Límite de comensales (Máximo 20)
+  if (!comensales || comensales < 1 || comensales > 20) {
+    return "El número de comensales debe estar entre 1 y 20 personas.";
+  }
+
+  // 2. Límite de caracteres en notas/peticiones especiales (Máximo 500)
+  if (notas && notas.length > 500) {
+    return "Las notas opcionales no pueden superar los 500 caracteres.";
+  }
+
+  // Configuración de fechas para validaciones temporales
+  const ahora = new Date();
+  const horaFormateada = hora.length === 5 ? `${hora}:00` : hora;
+  const fechaReservaCombinada = new Date(`${fecha}T${horaFormateada}`);
+
+  // 3. Control de fechas pasadas
+  if (fechaReservaCombinada < ahora) {
+    return "No es posible programar o modificar una reserva para una fecha u hora que ya ha pasado.";
+  }
+
+  // 4. Ventana de reserva a largo plazo (Máximo 1 mes de antelación)
+  const fechaMaxima = new Date();
+  fechaMaxima.setMonth(fechaMaxima.getMonth() + 1);
+  if (fechaReservaCombinada > fechaMaxima) {
+    return "El sistema solo permite gestionar reservas con un máximo de 1 mes de antelación.";
+  }
+
+  // 5. Validación de horarios de apertura del local (Turnos de Comida y Cena)
+  const [hh, mm] = hora.split(":").map(Number);
+  const minutosTotales = hh * 60 + mm;
+
+  const inicioComida = 13 * 60; // 13:00
+  const finComida = 16 * 60; // 16:00
+  const inicioCena = 20 * 60; // 20:00
+  const finCena = 23 * 60 + 30; // 23:30
+
+  const dentroDeComida =
+    minutosTotales >= inicioComida && minutosTotales <= finComida;
+  const dentroDeCena =
+    minutosTotales >= inicioCena && minutosTotales <= finCena;
+
+  if (!dentroDeComida && !dentroDeCena) {
+    return "La hora seleccionada se encuentra fuera de nuestro horario de apertura al público (Comidas: 13:00-16:00 | Cenas: 20:00-23:30).";
+  }
+
+  return null; // Todo correcto
+};
+
 // [CRM] Obtener todas las reservas
 export const getReservas = async (req, res) => {
   try {
@@ -46,22 +98,33 @@ export const getReservaById = async (req, res) => {
 // Crear una nueva reserva
 export const createReserva = async (req, res) => {
   try {
+    // Validar reglas de negocio antes de tocar la base de datos
+    const errorValidacion = validarReglasNegocio(req.body);
+    if (errorValidacion) {
+      return res.status(400).json({
+        success: false,
+        data: null,
+        message: errorValidacion,
+      });
+    }
+
     const { fecha, hora, mesa_id } = req.body;
 
+    // Verificar disponibilidad considerando la regla de protección de 90 minutos
     const isAvailable = await Reserva.checkAvailability(fecha, hora, mesa_id);
-
     if (!isAvailable) {
       return res.status(400).json({
         success: false,
         data: null,
-        message: "Lo sentimos, esa mesa ya está reservada en esa fecha y hora.",
+        message:
+          "Lo sentimos, esa mesa ya está comprometida dentro del rango de 90 minutos requerido para este servicio.",
       });
     }
 
     const id = await Reserva.create(req.body);
 
+    // Integración automatizada con Make.com
     const makeWebhookUrl = process.env.MAKE_WEBHOOK_RESERVA_URL;
-
     if (makeWebhookUrl) {
       const payloadMake = {
         reservaId: id,
@@ -112,32 +175,40 @@ export const updateReserva = async (req, res) => {
     const { id } = req.params;
     const { fecha, hora, mesa_id, estado } = req.body;
 
-    // VALIDACIÓN AÑADIDA: Verificamos si la nueva mesa/hora está libre (excluyendo la propia reserva)
+    // Si la reserva se pasa a "Cancelada", se saltan las validaciones de disponibilidad de mesa/horarios
     if (estado !== "Cancelada") {
+      const errorValidacion = validarReglasNegocio(req.body);
+      if (errorValidacion) {
+        return res.status(400).json({
+          success: false,
+          data: null,
+          message: errorValidacion,
+        });
+      }
+
+      // Validar solapamiento excluyendo el ID actual de la propia reserva que se está editando
       const isAvailable = await Reserva.checkAvailability(
         fecha,
         hora,
         mesa_id,
         id,
       );
-
       if (!isAvailable) {
         return res.status(400).json({
           success: false,
           data: null,
           message:
-            "No se puede guardar: La mesa está ocupada por otra reserva en esa fecha y hora.",
+            "No se puede guardar: La mesa seleccionada entra en conflicto de 90 minutos con otra reserva activa.",
         });
       }
     }
 
     const actualizado = await Reserva.update(id, req.body);
-
     if (!actualizado) {
       return res.status(404).json({
         success: false,
         data: null,
-        message: "Reserva no encontrada o no se pudo actualizar",
+        message: "Reserva no encontrada o no se pudo aplicar la actualización",
       });
     }
 
