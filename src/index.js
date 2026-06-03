@@ -44,7 +44,14 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: function (origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
+      // 1. Permite sin origen (Postman)
+      // 2. Permite orígenes explícitos en la lista blanca
+      // 3. Permite cualquier entorno de Preview generado por Vercel
+      if (
+        !origin ||
+        allowedOrigins.includes(origin) ||
+        origin.endsWith(".vercel.app")
+      ) {
         callback(null, true);
       } else {
         callback(new Error("Bloqueado por CORS"));
@@ -99,7 +106,6 @@ app.use("/api/contacto", contactoRoutes);
 // ARRANQUE DEL SERVIDOR
 // ==========================================
 
-// [SOLUCIÓN RED]: '0.0.0.0' fuerza a Node a exponer el puerto en todas las interfaces IPv4
 app.listen(PORT, "0.0.0.0", () => {
   console.log(
     `✅ Servidor corriendo en el puerto ${PORT} (Accesible vía 127.0.0.1 y localhost)`,
