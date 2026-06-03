@@ -32,8 +32,8 @@ const Reserva = {
 
     const [result] = await db.query(
       `INSERT INTO reservas 
-      (nombre_cliente, email_cliente, telefono_cliente, fecha, hora, comensales, mesa_id, zona, notas) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (nombre_cliente, email_cliente, telefono_cliente, fecha, hora, comensales, mesa_id, zona, notas, estado) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Confirmada')`,
       [
         nombre_cliente,
         email_cliente,
@@ -43,7 +43,7 @@ const Reserva = {
         comensales,
         mesa_id,
         zona,
-        notas,
+        notas || null,
       ],
     );
 
@@ -88,7 +88,7 @@ const Reserva = {
         mesa_id,
         zona,
         estado,
-        notas,
+        notas || null,
         id,
       ],
     );
@@ -96,20 +96,21 @@ const Reserva = {
     return result.affectedRows > 0;
   },
 
-  // 5. Verificar disponibilidad (AHORA SOPORTA EXCLUSIÓN DE ID PARA EDICIONES)
+  // 5. Verificar disponibilidad con rango de seguridad de 90 minutos
   checkAvailability: async (fecha, hora, mesa_id, exclude_id = null) => {
-    // Normalizar hora para que coincida de forma estricta con MySQL TIME
     const horaFormat = hora.length === 5 ? `${hora}:00` : hora;
 
-    let query = `SELECT id FROM reservas 
-                 WHERE DATE(fecha) = DATE(?) 
-                 AND TIME(hora) = TIME(?) 
-                 AND mesa_id = ? 
-                 AND estado != 'Cancelada'`;
+    // Se calcula la diferencia absoluta en minutos entre la reserva existente y la nueva propuesta.
+    // Si la diferencia es menor a 90 minutos en la misma mesa y no está cancelada, hay conflicto.
+    let query = `
+      SELECT id FROM reservas 
+      WHERE mesa_id = ? 
+      AND estado != 'Cancelada'
+      AND ABS(TIMESTAMPDIFF(MINUTE, TIMESTAMP(fecha, hora), TIMESTAMP(?, ?))) < 90
+    `;
 
-    const params = [fecha, horaFormat, mesa_id];
+    const params = [mesa_id, fecha, horaFormat];
 
-    // Si estamos editando, excluimos la reserva actual para que no choque consigo misma
     if (exclude_id) {
       query += ` AND id != ?`;
       params.push(exclude_id);
@@ -117,7 +118,7 @@ const Reserva = {
 
     const [rows] = await db.query(query, params);
 
-    // Devuelve true si no hay resultados (está libre)
+    // Devuelve true si la mesa está libre en ese rango de 90 minutos
     return rows.length === 0;
   },
 
