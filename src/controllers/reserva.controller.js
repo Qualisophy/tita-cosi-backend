@@ -1,16 +1,58 @@
 // src/controllers/reserva.controller.js
 import Reserva from "../models/reserva.model.js";
+import dns from "dns";
+import { promisify } from "util";
 
-// Función helper centralizada para validar las reglas de negocio del establecimiento
-const validarReglasNegocio = (datos) => {
-  const { fecha, hora, comensales, notas } = datos;
+// Convertimos resolveMx a promisa para poder usar async/await
+const resolveMx = promisify(dns.resolveMx);
 
-  // 1. Límite de comensales (Máximo 20)
+// Función para validar si el dominio del correo puede recibir mensajes (Registros MX)
+const verificarDominioCorreo = async (email) => {
+  const dominio = email.split("@")[1];
+  try {
+    const records = await resolveMx(dominio);
+    return records && records.length > 0;
+  } catch (error) {
+    return false; // El dominio no existe o no tiene servidores de correo configurados
+  }
+};
+
+// Función helper centralizada para validar las reglas de negocio (Ahora es ASYNC por el DNS)
+const validarReglasNegocio = async (datos) => {
+  const { fecha, hora, comensales, notas, telefono_cliente, email_cliente } =
+    datos;
+
+  // 1. Validación de Teléfono (De 9 a 15 dígitos reales)
+  if (!telefono_cliente) {
+    return "El teléfono es obligatorio.";
+  }
+  // Extraemos solo los números para contar su longitud real
+  const digitosTelefono = telefono_cliente.replace(/\D/g, "");
+  if (digitosTelefono.length < 9 || digitosTelefono.length > 15) {
+    return "El número de teléfono debe contener entre 9 y 15 dígitos reales.";
+  }
+
+  // 2. Validación de Email (Regex estricto + Resolución DNS)
+  if (email_cliente) {
+    // Fase 1: Regex exigiendo mínimo 3 caracteres en el proveedor
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]{3,}\.[a-zA-Z]{2,}$/;
+    if (!emailRegex.test(email_cliente)) {
+      return "El formato del correo electrónico no es válido. Usa un proveedor real (ej. @gmail.com).";
+    }
+
+    // Fase 2: Comprobación de registros MX en el DNS
+    const dominioValido = await verificarDominioCorreo(email_cliente);
+    if (!dominioValido) {
+      return "El dominio del correo proporcionado no existe o no está habilitado para recibir correos.";
+    }
+  }
+
+  // 3. Límite de comensales (Máximo 20)
   if (!comensales || comensales < 1 || comensales > 20) {
     return "El número de comensales debe estar entre 1 y 20 personas.";
   }
 
-  // 2. Límite de caracteres en notas/peticiones especiales (Máximo 500)
+  // 4. Límite de caracteres en notas/peticiones especiales (Máximo 500)
   if (notas && notas.length > 500) {
     return "Las notas opcionales no pueden superar los 500 caracteres.";
   }
@@ -20,19 +62,19 @@ const validarReglasNegocio = (datos) => {
   const horaFormateada = hora.length === 5 ? `${hora}:00` : hora;
   const fechaReservaCombinada = new Date(`${fecha}T${horaFormateada}`);
 
-  // 3. Control de fechas pasadas
+  // 5. Control de fechas pasadas
   if (fechaReservaCombinada < ahora) {
     return "No es posible programar o modificar una reserva para una fecha u hora que ya ha pasado.";
   }
 
-  // 4. Ventana de reserva a largo plazo (Máximo 1 mes de antelación)
+  // 6. Ventana de reserva a largo plazo (Máximo 1 mes de antelación)
   const fechaMaxima = new Date();
   fechaMaxima.setMonth(fechaMaxima.getMonth() + 1);
   if (fechaReservaCombinada > fechaMaxima) {
     return "El sistema solo permite gestionar reservas con un máximo de 1 mes de antelación.";
   }
 
-  // 5. Validación de horarios de apertura del local (Turnos de Comida y Cena)
+  // 7. Validación de horarios de apertura del local (Turnos de Comida y Cena)
   const [hh, mm] = hora.split(":").map(Number);
   const minutosTotales = hh * 60 + mm;
 
@@ -98,8 +140,8 @@ export const getReservaById = async (req, res) => {
 // Crear una nueva reserva
 export const createReserva = async (req, res) => {
   try {
-    // Validar reglas de negocio antes de tocar la base de datos
-    const errorValidacion = validarReglasNegocio(req.body);
+    // Validar reglas de negocio antes de tocar la base de datos (con AWAIT por la comprobación DNS)
+    const errorValidacion = await validarReglasNegocio(req.body);
     if (errorValidacion) {
       return res.status(400).json({
         success: false,
@@ -177,7 +219,8 @@ export const updateReserva = async (req, res) => {
 
     // Si la reserva se pasa a "Cancelada", se saltan las validaciones de disponibilidad de mesa/horarios
     if (estado !== "Cancelada") {
-      const errorValidacion = validarReglasNegocio(req.body);
+      // Usar AWAIT por la comprobación DNS
+      const errorValidacion = await validarReglasNegocio(req.body);
       if (errorValidacion) {
         return res.status(400).json({
           success: false,
