@@ -39,13 +39,11 @@ export const login = async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRES_IN || "8h" },
     );
 
-    const isProduction = process.env.NODE_ENV === "production";
-
     // 4. Inyectamos el token en una Cookie HTTP-Only
     res.cookie("token", token, {
       httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? "none" : "lax",
+      secure: process.env.NODE_ENV === "production",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
       maxAge: 8 * 60 * 60 * 1000,
     });
 
@@ -56,6 +54,7 @@ export const login = async (req, res) => {
     });
   } catch (error) {
     console.error(error);
+
     res
       .status(500)
       .json({ message: "Error interno en el servidor al hacer login" });
@@ -63,15 +62,12 @@ export const login = async (req, res) => {
 };
 
 export const logout = (req, res) => {
-  const isProduction = process.env.NODE_ENV === "production";
-
   // Limpiamos la cookie que contiene el token
-  // IMPORTANTE: Los parámetros de eliminación deben coincidir exactamente con los de creación
   res.clearCookie("token", {
     httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? "none" : "lax",
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
   });
 
-  res.status(200).json({ message: "Sesión cerrada correctamente" });
+  res.json({ message: "Sesión cerrada correctamente" });
 };

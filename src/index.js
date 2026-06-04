@@ -22,8 +22,6 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.set("trust proxy", 1);
-
 // Configuración de rutas absolutas para ES Modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -92,7 +90,8 @@ app.get("/api/health", (req, res) => {
 // Autenticación (Login)
 app.use("/api/auth", authRoutes);
 
-// Módulo de Categorías
+// Módulo de Categoría
+
 app.use("/api/categorias", categoriaRoutes);
 
 // Módulo de Productos
