@@ -22,6 +22,12 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ==========================================
+// FIX: CONFIANZA EN PROXY INVERSO
+// ==========================================
+// Obligatorio para que Render mantenga el 'secure: true' en las cookies
+app.set("trust proxy", 1);
+
 // Configuración de rutas absolutas para ES Modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -91,7 +97,6 @@ app.get("/api/health", (req, res) => {
 app.use("/api/auth", authRoutes);
 
 // Módulo de Categoría
-
 app.use("/api/categorias", categoriaRoutes);
 
 // Módulo de Productos
