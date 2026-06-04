@@ -8,9 +8,11 @@ export const login = async (req, res) => {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res
-        .status(400)
-        .json({ message: "Email y contraseña son obligatorios" });
+      return res.status(400).json({
+        success: false,
+        data: null,
+        message: "Email y contraseña son obligatorios",
+      });
     }
 
     // 1. Buscamos al usuario en la BD
@@ -20,7 +22,11 @@ export const login = async (req, res) => {
     );
 
     if (users.length === 0) {
-      return res.status(401).json({ message: "Credenciales inválidas" });
+      return res.status(401).json({
+        success: false,
+        data: null,
+        message: "Credenciales inválidas",
+      });
     }
 
     const admin = users[0];
@@ -29,7 +35,11 @@ export const login = async (req, res) => {
     const isMatch = await bcrypt.compare(password, admin.password_hash);
 
     if (!isMatch) {
-      return res.status(401).json({ message: "Credenciales inválidas" });
+      return res.status(401).json({
+        success: false,
+        data: null,
+        message: "Credenciales inválidas",
+      });
     }
 
     // 3. Creamos el Token JWT (La caducidad se lee del .env o usa 8h por defecto)
@@ -39,35 +49,46 @@ export const login = async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRES_IN || "8h" },
     );
 
-    // 4. Inyectamos el token en una Cookie HTTP-Only
+    const isProduction = process.env.NODE_ENV === "production";
+
+    // 4. Inyectamos el token en una Cookie HTTP-Only usando 'lax' gracias al proxy
     res.cookie("token", token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      secure: isProduction,
+      sameSite: "lax",
       maxAge: 8 * 60 * 60 * 1000,
     });
 
-    // 5. Devolvemos la confirmación al frontend SIN el token en el cuerpo
-    res.status(200).json({
+    // 5. Devolvemos la confirmación al frontend SIN el token en el cuerpo, respetando estructura JSON
+    return res.status(200).json({
+      success: true,
+      data: { id: admin.id, email: admin.email },
       message: "Login exitoso",
-      admin: { id: admin.id, email: admin.email },
     });
   } catch (error) {
     console.error(error);
 
-    res
-      .status(500)
-      .json({ message: "Error interno en el servidor al hacer login" });
+    return res.status(500).json({
+      success: false,
+      data: null,
+      message: "Error interno en el servidor al hacer login",
+    });
   }
 };
 
 export const logout = (req, res) => {
-  // Limpiamos la cookie que contiene el token
+  const isProduction = process.env.NODE_ENV === "production";
+
+  // Limpiamos la cookie que contiene el token con los atributos exactos de creación
   res.clearCookie("token", {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
+    secure: isProduction,
+    sameSite: "lax",
   });
 
-  res.json({ message: "Sesión cerrada correctamente" });
+  return res.status(200).json({
+    success: true,
+    data: null,
+    message: "Sesión cerrada correctamente",
+  });
 };
