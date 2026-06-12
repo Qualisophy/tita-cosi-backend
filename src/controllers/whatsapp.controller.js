@@ -77,13 +77,24 @@ export const receiveMessage = async (req, res) => {
             fecha,
             hora,
             comensales,
+            zona_preferida,
             notas,
           } = respuestaBot.datos;
 
-          // 4. AUTO-ASIGNADOR DE MESAS (Busca la primera libre con capacidad suficiente)
+          // 4. AUTO-ASIGNADOR DE MESAS BASADO EN ZONA
+          // Determinamos el prefijo de la mesa: "T" para terraza, "S" para sala
+          const quiereTerraza = zona_preferida
+            ?.toLowerCase()
+            .includes("terraza");
+          const prefijoMesa = quiereTerraza ? "T" : "S";
+
           let mesaAsignada = null;
           for (const [id_mesa, capacidad] of Object.entries(MESAS_CAPACIDAD)) {
-            if (capacidad >= Number(comensales)) {
+            // Filtramos por zona (prefijo) y capacidad
+            if (
+              id_mesa.startsWith(prefijoMesa) &&
+              capacidad >= Number(comensales)
+            ) {
               const libre = await Reserva.checkAvailability(
                 fecha,
                 hora,
@@ -96,9 +107,12 @@ export const receiveMessage = async (req, res) => {
             }
           }
 
-          // Si no encontramos mesa libre o pide más comensales que la mesa más grande
+          // Si no encontramos mesa libre en esa zona
           if (!mesaAsignada) {
-            const mensajeAforo = `¡Vaya, ${nombre_cliente}! 😅 He revisado nuestra disponibilidad y no nos quedan mesas libres para ${comensales} personas el día ${fecha} a las ${hora}. ¿Te gustaría probar con otra hora u otro día?`;
+            const nombreZona = quiereTerraza
+              ? "la terraza"
+              : "el salón interior";
+            const mensajeAforo = `¡Vaya, ${nombre_cliente}! 😅 He revisado nuestra disponibilidad y no nos quedan mesas libres en ${nombreZona} para ${comensales} personas el día ${fecha} a las ${hora}. ¿Te gustaría probar en la otra zona, o cambiar la hora/día?`;
             await enviarMensajeWhatsApp(numeroCliente, mensajeAforo);
             return;
           }
@@ -112,7 +126,7 @@ export const receiveMessage = async (req, res) => {
             hora,
             comensales: Number(comensales),
             mesa_id: mesaAsignada,
-            zona: mesaAsignada.startsWith("T") ? "Terraza" : "Comedor",
+            zona: quiereTerraza ? "Terraza" : "Comedor", // Guardamos la zona exacta en DB
             notas: notas || "Reserva gestionada vía WhatsApp Bot",
           };
 
@@ -144,7 +158,7 @@ export const receiveMessage = async (req, res) => {
           }
 
           // 9. ENVIAR CONFIRMACIÓN FINAL AL CLIENTE
-          const mensajeConfirmacion = `¡Perfecto ${nombre_cliente}! 🎉 Tu reserva para ${comensales} personas el día ${fecha} a las ${hora} ha sido confirmada en la ${payloadReserva.zona}. Te hemos enviado un correo a ${email_cliente} con los detalles. ¡Te esperamos en Taberna Tita Cosi!`;
+          const mensajeConfirmacion = `¡Perfecto ${nombre_cliente}! 🎉 Tu reserva para ${comensales} personas el día ${fecha} a las ${hora} ha sido confirmada en ${payloadReserva.zona}. Te hemos enviado un correo a ${email_cliente} con los detalles. ¡Te esperamos en Taberna Tita Cosi!`;
           await enviarMensajeWhatsApp(numeroCliente, mensajeConfirmacion);
         }
       }
