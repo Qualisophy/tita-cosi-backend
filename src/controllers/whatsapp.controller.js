@@ -72,24 +72,30 @@ export const receiveMessage = async (req, res) => {
           await enviarMensajeWhatsApp(numeroCliente, respuestaBot.mensaje);
         } else {
           // 3. ¡Es un JSON! Tenemos los datos. A guardar en DB.
-          // Añadimos 'notas' a la desestructuración
-          const { nombre_cliente, fecha, hora, comensales, notas } =
-            respuestaBot.datos;
+          // Extraemos también el email de la respuesta de Groq
+          const {
+            nombre_cliente,
+            email_cliente,
+            fecha,
+            hora,
+            comensales,
+            notas,
+          } = respuestaBot.datos;
 
-          // Reutilizamos tu modelo (Asumimos mesa_id null hasta que un admin la asigne)
+          // Reutilizamos tu modelo, ahora pasando el email real
           const insertId = await Reserva.create({
             nombre_cliente,
-            email_cliente: "whatsapp@titacosi.es", // <-- CORREGIDO: Ya no es null
+            email_cliente, // <-- Usamos el email proporcionado por el cliente
             telefono_cliente: numeroCliente,
             fecha,
             hora,
             comensales: Number(comensales),
             mesa_id: 1,
             zona: "Comedor", // Default
-            notas: notas || "Reserva gestionada vía WhatsApp Bot", // <-- Usamos las notas de la IA
+            notas: notas || "Reserva gestionada vía WhatsApp Bot",
           });
 
-          // 4. Disparar Webhook a Make (exactamente igual que en tu controlador web)
+          // 4. Disparar Webhook a Make
           const makeWebhookUrl = process.env.MAKE_WEBHOOK_RESERVA_URL;
           if (makeWebhookUrl) {
             fetch(makeWebhookUrl, {
@@ -98,7 +104,7 @@ export const receiveMessage = async (req, res) => {
               body: JSON.stringify({
                 reservaId: insertId,
                 nombre_cliente,
-                email_cliente: "whatsapp@titacosi.es",
+                email_cliente, // <-- Lo pasamos a Make para que envíe el correo
                 telefono_cliente: numeroCliente,
                 fecha,
                 hora,
@@ -110,7 +116,7 @@ export const receiveMessage = async (req, res) => {
           }
 
           // 5. Enviar confirmación final al cliente
-          const mensajeConfirmacion = `¡Perfecto ${nombre_cliente}! 🎉 Tu reserva para ${comensales} personas el día ${fecha} a las ${hora} ha sido confirmada. Hemos anotado tus peticiones. ¡Te esperamos en Taberna Tita Cosi!`;
+          const mensajeConfirmacion = `¡Perfecto ${nombre_cliente}! 🎉 Tu reserva para ${comensales} personas el día ${fecha} a las ${hora} ha sido confirmada. Te hemos enviado un correo a ${email_cliente} con los detalles. ¡Te esperamos en Taberna Tita Cosi!`;
           await enviarMensajeWhatsApp(numeroCliente, mensajeConfirmacion);
         }
       }
