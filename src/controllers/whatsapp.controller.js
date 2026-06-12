@@ -1,13 +1,12 @@
 // src/controllers/whatsapp.controller.js
 import Reserva from "../models/reserva.model.js";
 import { procesarMensaje } from "../services/chatbot.service.js";
+import { validarReglasNegocio, MESAS_CAPACIDAD } from "./reserva.controller.js";
 
-// Tu token de validación que configurarás en el panel de Meta (puede ser cualquier palabra inventada por ti)
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_ID = process.env.WHATSAPP_PHONE_ID;
 
-// Función auxiliar para enviar mensajes por WhatsApp
 const enviarMensajeWhatsApp = async (numeroDestino, texto) => {
   try {
     const response = await fetch(
@@ -61,7 +60,7 @@ export const receiveMessage = async (req, res) => {
       const message = value?.messages?.[0];
 
       if (message && message.type === "text") {
-        const numeroCliente = message.from; // Número de quien escribe
+        const numeroCliente = message.from;
         const textoCliente = message.text.body;
 
         // 1. Pasar mensaje al Chatbot
@@ -71,8 +70,7 @@ export const receiveMessage = async (req, res) => {
           // 2. Si no es JSON, enviamos la pregunta de la IA al cliente
           await enviarMensajeWhatsApp(numeroCliente, respuestaBot.mensaje);
         } else {
-          // 3. ¡Es un JSON! Tenemos los datos. A guardar en DB.
-          // Extraemos también el email de la respuesta de Groq
+          // 3. ¡Es un JSON! Tenemos los datos. A preparar la DB.
           const {
             nombre_cliente,
             email_cliente,
@@ -82,20 +80,56 @@ export const receiveMessage = async (req, res) => {
             notas,
           } = respuestaBot.datos;
 
-          // Reutilizamos tu modelo, ahora pasando el email real
-          const insertId = await Reserva.create({
+          // 4. AUTO-ASIGNADOR DE MESAS (Busca la primera libre con capacidad suficiente)
+          let mesaAsignada = null;
+          for (const [id_mesa, capacidad] of Object.entries(MESAS_CAPACIDAD)) {
+            if (capacidad >= Number(comensales)) {
+              const libre = await Reserva.checkAvailability(
+                fecha,
+                hora,
+                id_mesa,
+              );
+              if (libre) {
+                mesaAsignada = id_mesa;
+                break;
+              }
+            }
+          }
+
+          // Si no encontramos mesa libre o pide más comensales que la mesa más grande
+          if (!mesaAsignada) {
+            const mensajeAforo = `¡Vaya, ${nombre_cliente}! 😅 He revisado nuestra disponibilidad y no nos quedan mesas libres para ${comensales} personas el día ${fecha} a las ${hora}. ¿Te gustaría probar con otra hora u otro día?`;
+            await enviarMensajeWhatsApp(numeroCliente, mensajeAforo);
+            return;
+          }
+
+          // 5. CONSTRUIR PAYLOAD DE RESERVA
+          const payloadReserva = {
             nombre_cliente,
-            email_cliente, // <-- Usamos el email proporcionado por el cliente
+            email_cliente,
             telefono_cliente: numeroCliente,
             fecha,
             hora,
             comensales: Number(comensales),
-            mesa_id: 1,
-            zona: "Comedor", // Default
+            mesa_id: mesaAsignada,
+            zona: mesaAsignada.startsWith("T") ? "Terraza" : "Comedor",
             notas: notas || "Reserva gestionada vía WhatsApp Bot",
-          });
+          };
 
-          // 4. Disparar Webhook a Make
+          // 6. VALIDAR CON TUS REGLAS DE NEGOCIO GLOBALES
+          const errorValidacion = await validarReglasNegocio(payloadReserva);
+          if (errorValidacion) {
+            await enviarMensajeWhatsApp(
+              numeroCliente,
+              `Tenemos un pequeño problema: ${errorValidacion} ¿Podrías indicarme otros datos o corregirlos?`,
+            );
+            return;
+          }
+
+          // 7. GUARDAR EN DB
+          const insertId = await Reserva.create(payloadReserva);
+
+          // 8. DISPARAR WEBHOOK A MAKE
           const makeWebhookUrl = process.env.MAKE_WEBHOOK_RESERVA_URL;
           if (makeWebhookUrl) {
             fetch(makeWebhookUrl, {
@@ -103,20 +137,14 @@ export const receiveMessage = async (req, res) => {
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 reservaId: insertId,
-                nombre_cliente,
-                email_cliente, // <-- Lo pasamos a Make para que envíe el correo
-                telefono_cliente: numeroCliente,
-                fecha,
-                hora,
-                comensales,
-                notas: notas || "Reserva gestionada vía WhatsApp Bot",
+                ...payloadReserva,
                 tipo_formulario: "reserva",
               }),
             }).catch((err) => console.error("Error webhook Make WA:", err));
           }
 
-          // 5. Enviar confirmación final al cliente
-          const mensajeConfirmacion = `¡Perfecto ${nombre_cliente}! 🎉 Tu reserva para ${comensales} personas el día ${fecha} a las ${hora} ha sido confirmada. Te hemos enviado un correo a ${email_cliente} con los detalles. ¡Te esperamos en Taberna Tita Cosi!`;
+          // 9. ENVIAR CONFIRMACIÓN FINAL AL CLIENTE
+          const mensajeConfirmacion = `¡Perfecto ${nombre_cliente}! 🎉 Tu reserva para ${comensales} personas el día ${fecha} a las ${hora} ha sido confirmada en la ${payloadReserva.zona}. Te hemos enviado un correo a ${email_cliente} con los detalles. ¡Te esperamos en Taberna Tita Cosi!`;
           await enviarMensajeWhatsApp(numeroCliente, mensajeConfirmacion);
         }
       }

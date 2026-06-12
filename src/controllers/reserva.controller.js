@@ -5,8 +5,8 @@ import { promisify } from "util";
 
 const resolveMx = promisify(dns.resolveMx);
 
-// Diccionario estático de mesas para validación cruzada backend
-const MESAS_CAPACIDAD = {
+// AÑADIDO 'export': Diccionario estático de mesas para validación cruzada backend
+export const MESAS_CAPACIDAD = {
   S1: 2,
   S2: 2,
   S3: 2,
@@ -32,7 +32,8 @@ const verificarDominioCorreo = async (email) => {
   }
 };
 
-const validarReglasNegocio = async (datos) => {
+// AÑADIDO 'export': Validador central del negocio
+export const validarReglasNegocio = async (datos) => {
   const {
     fecha,
     hora,
