@@ -15,6 +15,7 @@ import categoriaRoutes from "./routes/categoria.routes.js";
 import productoRoutes from "./routes/producto.routes.js";
 import reservaRoutes from "./routes/reserva.routes.js";
 import contactoRoutes from "./routes/contacto.routes.js";
+import whatsappRoutes from "./routes/whatsapp.routes.js"; // <-- NUEVA IMPORTACIÓN
 
 // Cargar variables de entorno
 dotenv.config();
@@ -42,8 +43,8 @@ app.use(helmet({ crossOriginResourcePolicy: false }));
 // [SOLUCIÓN CORS]: Lista blanca para aceptar local (IPv4/IPv6) y producción dinámicamente
 const allowedOrigins = [
   "http://localhost:4321",
-  "http://127.0.0.1:4321",
-  "https://tita-cosi.vercel.app",
+  "[http://127.0.0.1:4321](http://127.0.0.1:4321)",
+  "[https://tita-cosi.vercel.app](https://tita-cosi.vercel.app)",
   process.env.CORS_ORIGIN,
 ];
 
@@ -107,6 +108,9 @@ app.use("/api/reservas", reservaRoutes);
 
 // Módulo de Contacto
 app.use("/api/contacto", contactoRoutes);
+
+// Módulo de WhatsApp (Chatbot)
+app.use("/api/whatsapp", whatsappRoutes);
 
 // ==========================================
 // ARRANQUE DEL SERVIDOR
