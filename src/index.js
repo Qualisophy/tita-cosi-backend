@@ -43,8 +43,8 @@ app.use(helmet({ crossOriginResourcePolicy: false }));
 // [SOLUCIÓN CORS]: Lista blanca para aceptar local (IPv4/IPv6) y producción dinámicamente
 const allowedOrigins = [
   "http://localhost:4321",
-  "[http://127.0.0.1:4321](http://127.0.0.1:4321)",
-  "[https://tita-cosi.vercel.app](https://tita-cosi.vercel.app)",
+  "http://127.0.0.1:4321",
+  "https://tita-cosi.vercel.app",
   process.env.CORS_ORIGIN,
 ];
 
