@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
+    "ngrok": "npx ngrok http 3000",
     "db:reset": "node src/scripts/resetDb.js",
     "db:admin": "node src/scripts/createAdmin.js",
     "test": "echo \"Error: no test specified\" && exit 1"

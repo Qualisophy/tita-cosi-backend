@@ -5,7 +5,7 @@ import { promisify } from "util";
 
 const resolveMx = promisify(dns.resolveMx);
 
-// AÑADIDO 'export': Diccionario estático de mesas para validación cruzada backend
+// Diccionario estático de mesas para validación cruzada backend
 export const MESAS_CAPACIDAD = {
   S1: 2,
   S2: 2,
@@ -32,7 +32,7 @@ const verificarDominioCorreo = async (email) => {
   }
 };
 
-// AÑADIDO 'export': Validador central del negocio
+// Validador central del negocio
 export const validarReglasNegocio = async (datos) => {
   const {
     fecha,
@@ -64,7 +64,6 @@ export const validarReglasNegocio = async (datos) => {
     }
   }
 
-  // NUEVO: Validación de Capacidad de la Mesa vs Comensales
   if (!comensales || comensales < 1 || comensales > 20) {
     return "El número de comensales debe estar entre 1 y 20 personas.";
   }
@@ -81,6 +80,11 @@ export const validarReglasNegocio = async (datos) => {
   const ahora = new Date();
   const horaFormateada = hora.length === 5 ? `${hora}:00` : hora;
   const fechaReservaCombinada = new Date(`${fecha}T${horaFormateada}`);
+
+  // FIX: Bloqueo estricto para los Lunes
+  if (fechaReservaCombinada.getDay() === 1) {
+    return "La taberna permanece cerrada por descanso del personal todos los lunes. Por favor, selecciona otro día de la semana.";
+  }
 
   if (fechaReservaCombinada < ahora) {
     return "No es posible programar o modificar una reserva para una fecha u hora que ya ha pasado.";

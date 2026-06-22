@@ -1,5 +1,6 @@
 // src/controllers/whatsapp.controller.js
 import Reserva from "../models/reserva.model.js";
+import Chat from "../models/chat.model.js";
 import { procesarMensaje } from "../services/chatbot.service.js";
 import { validarReglasNegocio, MESAS_CAPACIDAD } from "./reserva.controller.js";
 
@@ -8,6 +9,13 @@ const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_ID = process.env.WHATSAPP_PHONE_ID;
 
 const enviarMensajeWhatsApp = async (numeroDestino, texto) => {
+  if (!texto) {
+    console.warn(
+      `[WA API] Intento bloqueado: Se intentó enviar un mensaje vacío o undefined al número ${numeroDestino}.`,
+    );
+    return;
+  }
+
   try {
     const response = await fetch(
       `https://graph.facebook.com/v25.0/${PHONE_ID}/messages`,
@@ -27,9 +35,11 @@ const enviarMensajeWhatsApp = async (numeroDestino, texto) => {
     );
 
     const data = await response.json();
-    console.log("Respuesta de Meta al intentar enviar WhatsApp:", data);
+    if (data.error) {
+      console.error("[WA API] Error de Meta:", data.error);
+    }
   } catch (error) {
-    console.error("Error enviando WhatsApp:", error);
+    console.error("[WA API] Error de red enviando WhatsApp:", error);
   }
 };
 
@@ -48,7 +58,6 @@ export const verifyWebhook = (req, res) => {
 };
 
 export const receiveMessage = async (req, res) => {
-  // Meta requiere un 200 OK inmediato para no reintentar el envío
   res.sendStatus(200);
 
   try {
@@ -63,14 +72,11 @@ export const receiveMessage = async (req, res) => {
         const numeroCliente = message.from;
         const textoCliente = message.text.body;
 
-        // 1. Pasar mensaje al Chatbot
         const respuestaBot = await procesarMensaje(numeroCliente, textoCliente);
 
         if (!respuestaBot.esJson) {
-          // 2. Si no es JSON, enviamos la pregunta de la IA al cliente
           await enviarMensajeWhatsApp(numeroCliente, respuestaBot.mensaje);
         } else {
-          // 3. ¡Es un JSON! Tenemos los datos. A preparar la DB.
           const {
             nombre_cliente,
             email_cliente,
@@ -81,8 +87,7 @@ export const receiveMessage = async (req, res) => {
             notas,
           } = respuestaBot.datos;
 
-          // 4. AUTO-ASIGNADOR DE MESAS BASADO EN ZONA
-          // Determinamos el prefijo de la mesa: "T" para terraza, "S" para sala
+          const sessionId = respuestaBot.sessionId;
           const quiereTerraza = zona_preferida
             ?.toLowerCase()
             .includes("terraza");
@@ -90,7 +95,6 @@ export const receiveMessage = async (req, res) => {
 
           let mesaAsignada = null;
           for (const [id_mesa, capacidad] of Object.entries(MESAS_CAPACIDAD)) {
-            // Filtramos por zona (prefijo) y capacidad
             if (
               id_mesa.startsWith(prefijoMesa) &&
               capacidad >= Number(comensales)
@@ -107,17 +111,40 @@ export const receiveMessage = async (req, res) => {
             }
           }
 
-          // Si no encontramos mesa libre en esa zona
           if (!mesaAsignada) {
             const nombreZona = quiereTerraza
               ? "la terraza"
               : "el salón interior";
-            const mensajeAforo = `¡Vaya, ${nombre_cliente}! 😅 He revisado nuestra disponibilidad y no nos quedan mesas libres en ${nombreZona} para ${comensales} personas el día ${fecha} a las ${hora}. ¿Te gustaría probar en la otra zona, o cambiar la hora/día?`;
-            await enviarMensajeWhatsApp(numeroCliente, mensajeAforo);
+
+            const maxCapacidadZona = Math.max(
+              ...Object.entries(MESAS_CAPACIDAD)
+                .filter(([id]) => id.startsWith(prefijoMesa))
+                .map(([, cap]) => cap),
+            );
+
+            let instruccionIA = "";
+            if (Number(comensales) > maxCapacidadZona) {
+              instruccionIA = `[SISTEMA]: Por aforo físico, la mesa más grande en ${nombreZona} es para ${maxCapacidadZona}. Pídele al cliente que LLAME POR TELÉFONO. IGNORA LA REGLA DEL JSON, RESPONDE SOLO CON TEXTO NATURAL.`;
+            } else {
+              instruccionIA = `[SISTEMA]: Las mesas para ${comensales} personas en ${nombreZona} ya están ocupadas a esa hora. Ofrécele alternativas de hora o zona. IGNORA LA REGLA DEL JSON, RESPONDE SOLO CON TEXTO NATURAL.`;
+            }
+
+            if (sessionId)
+              await Chat.addMessage(sessionId, "system", instruccionIA);
+
+            const respuestaRechazo = await procesarMensaje(
+              numeroCliente,
+              "[SISTEMA]: Genera ahora mismo la respuesta en texto plano. CERO JSON.",
+            );
+            // Fallback en caso de que siga devolviendo JSON
+            const textoRechazo =
+              respuestaRechazo.mensaje ||
+              `Lo siento, no disponemos de mesas para ${comensales} personas en ${nombreZona} a esa hora. Por favor, llámanos para gestionar tu reserva de forma manual.`;
+
+            await enviarMensajeWhatsApp(numeroCliente, textoRechazo);
             return;
           }
 
-          // 5. CONSTRUIR PAYLOAD DE RESERVA
           const payloadReserva = {
             nombre_cliente,
             email_cliente,
@@ -126,24 +153,30 @@ export const receiveMessage = async (req, res) => {
             hora,
             comensales: Number(comensales),
             mesa_id: mesaAsignada,
-            zona: quiereTerraza ? "Terraza" : "Comedor", // Guardamos la zona exacta en DB
+            zona: quiereTerraza ? "Terraza" : "Comedor",
             notas: notas || "Reserva gestionada vía WhatsApp Bot",
           };
 
-          // 6. VALIDAR CON TUS REGLAS DE NEGOCIO GLOBALES
           const errorValidacion = await validarReglasNegocio(payloadReserva);
           if (errorValidacion) {
-            await enviarMensajeWhatsApp(
+            const instruccionErrorIA = `[SISTEMA]: Fallo: ${errorValidacion}. Pídele al usuario que corrija esto. IGNORA LA REGLA DEL JSON, RESPONDE SOLO CON TEXTO NATURAL.`;
+            if (sessionId)
+              await Chat.addMessage(sessionId, "system", instruccionErrorIA);
+
+            const respuestaError = await procesarMensaje(
               numeroCliente,
-              `Tenemos un pequeño problema: ${errorValidacion} ¿Podrías indicarme otros datos o corregirlos?`,
+              "[SISTEMA]: Redacta el error de validación en texto plano.",
             );
+            const textoError =
+              respuestaError.mensaje ||
+              `Tenemos un pequeño problema: ${errorValidacion} ¿Podrías indicarme el dato correcto?`;
+
+            await enviarMensajeWhatsApp(numeroCliente, textoError);
             return;
           }
 
-          // 7. GUARDAR EN DB
           const insertId = await Reserva.create(payloadReserva);
 
-          // 8. DISPARAR WEBHOOK A MAKE
           const makeWebhookUrl = process.env.MAKE_WEBHOOK_RESERVA_URL;
           if (makeWebhookUrl) {
             fetch(makeWebhookUrl, {
@@ -157,9 +190,20 @@ export const receiveMessage = async (req, res) => {
             }).catch((err) => console.error("Error webhook Make WA:", err));
           }
 
-          // 9. ENVIAR CONFIRMACIÓN FINAL AL CLIENTE
-          const mensajeConfirmacion = `¡Perfecto ${nombre_cliente}! 🎉 Tu reserva para ${comensales} personas el día ${fecha} a las ${hora} ha sido confirmada en ${payloadReserva.zona}. Te hemos enviado un correo a ${email_cliente} con los detalles. ¡Te esperamos en Taberna Tita Cosi!`;
-          await enviarMensajeWhatsApp(numeroCliente, mensajeConfirmacion);
+          const instruccionExito = `[SISTEMA]: Reserva guardada con éxito (ID: ${insertId}). Confírmale la mesa en ${payloadReserva.zona}. IGNORA LA REGLA DEL JSON, DESPÍDETE EN TEXTO PLANO.`;
+          if (sessionId)
+            await Chat.addMessage(sessionId, "system", instruccionExito);
+
+          const respuestaExito = await procesarMensaje(
+            numeroCliente,
+            "[SISTEMA]: Genera el mensaje final de confirmación en texto plano.",
+          );
+          const textoExito =
+            respuestaExito.mensaje ||
+            `¡Perfecto ${nombre_cliente}! 🎉 Tu reserva para ${comensales} personas el día ${fecha} a las ${hora} ha sido confirmada en ${payloadReserva.zona}. Te hemos enviado un correo. ¡Te esperamos en Taberna Tita Cosi!`;
+
+          await enviarMensajeWhatsApp(numeroCliente, textoExito);
+          await Chat.deleteSession(numeroCliente);
         }
       }
     }
