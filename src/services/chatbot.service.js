@@ -1,20 +1,11 @@
 // src/services/chatbot.service.js
 import Groq from "groq-sdk";
-import Chat from "../models/chat.model.js";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-export const procesarMensaje = async (numeroTelefono, mensajeUsuario) => {
+export const extraerEntidad = async (mensajeUsuario, tipoEntidad) => {
   const hoy = new Date();
-  const manana = new Date(hoy);
-  manana.setDate(manana.getDate() + 1);
-
-  const opcionesFecha = { timeZone: "Europe/Madrid" };
-  const fechaHoyISO = hoy.toLocaleString("sv-SE", opcionesFecha).split(" ")[0];
-  const fechaMananaISO = manana
-    .toLocaleString("sv-SE", opcionesFecha)
-    .split(" ")[0];
-
+  const opcionesISO = { timeZone: "Europe/Madrid" };
   const dias = [
     "Domingo",
     "Lunes",
@@ -24,113 +15,50 @@ export const procesarMensaje = async (numeroTelefono, mensajeUsuario) => {
     "Viernes",
     "Sábado",
   ];
-  const diaHoy = dias[hoy.getDay()];
-  const diaManana = dias[manana.getDay()];
 
-  // PROMPT CON GUIÓN ESTRICTO Y FAQ CERRADO
-  const SYSTEM_PROMPT = `
-  Eres el asistente virtual de la "Taberna Tita Cosi" (Málaga). Tu tono es amable, conciso y resolutivo.
+  const calendarioMapeo = Array.from({ length: 14 })
+    .map((_, i) => {
+      const d = new Date(hoy);
+      d.setDate(d.getDate() + i);
+      const iso = d.toLocaleString("sv-SE", opcionesISO).split(" ")[0];
+      const diaAyerHoyManana = i === 0 ? "(hoy)" : i === 1 ? "(mañana)" : "";
+      return `- ${dias[d.getDay()]} ${d.getDate()}: ${iso} ${diaAyerHoyManana}`;
+    })
+    .join("\n");
 
-  TU ÚNICA MISIÓN:
-  Recopilar los datos necesarios para una reserva. El número de teléfono ya lo tenemos. La asignación de mesa la hace el sistema internamente según disponibilidad.
-
-  DATOS A RECOPILAR:
-  1. Nombre
-  2. Email
-  3. Fecha (Usa contexto: HOY es ${diaHoy} ${fechaHoyISO}, MAÑANA es ${diaManana} ${fechaMananaISO}. LUNES CERRADO).
-  4. Hora (Traduce formatos. Ej: "8 de la tarde" o "las 8" -> 20:00. Horario válido: 13:00-16:00 y 20:00-23:30).
-  5. Número de comensales.
-  6. Peticiones o alergias (Opcional. Si no tienen, anota "Ninguna").
-
-  PREGUNTAS PERMITIDAS (FAQ):
-  Solo estás autorizado a responder dudas sobre estos 4 temas. Usa esta información exacta:
-  - Dirección: Av. del Editor Ángel Caffarena, 13, Málaga (Teatinos).
-  - Horario: Comidas 13:00 a 16:00 | Cenas 20:00 a 23:30. Lunes cerrado.
-  - Opciones de comida: Sí, contamos con opciones veganas y platos adaptados para celíacos.
-  - Accesibilidad: Sí, la taberna es totalmente accesible para personas en silla de ruedas o con movilidad reducida.
-
-  RESTRICCIÓN ABSOLUTA:
-  Si el usuario pregunta cualquier otra cosa (precios, menú completo, receta, chistes, etc.), debes responder cortésmente: "Lo siento, mi función principal es gestionar las reservas y resolver dudas básicas sobre accesibilidad, horarios o alérgenos. ¿Para cuándo te gustaría la mesa?".
-
-  FORMATO DE SALIDA (JSON ESTRICTO):
-  Nunca escribas texto fuera del JSON.
-
-  ESTADO 1: Si te hacen una pregunta de la FAQ o te faltan datos por recopilar:
-  {
-    "status": "PENDING",
-    "respuesta_usuario": "Tu respuesta amable resolviendo la duda o pidiendo un único dato faltante."
-  }
-
-  ESTADO 2: SI Y SOLO SI tienes los 6 datos, devuelve el resumen para que el sistema procese la reserva:
-  {
-    "status": "COMPLETED",
-    "datos": {
-      "nombre_cliente": "Valor",
-      "email_cliente": "Valor",
-      "fecha": "YYYY-MM-DD",
-      "hora": "HH:MM",
-      "comensales": 0,
-      "notas": "Valor"
-    }
-  }
-  `;
-
-  const sessionId = await Chat.getSessionId(numeroTelefono);
-  let history = await Chat.getHistory(sessionId);
-
-  if (history.length === 0) {
-    await Chat.addMessage(sessionId, "system", SYSTEM_PROMPT);
-    history = [{ role: "system", content: SYSTEM_PROMPT }];
-  } else {
-    if (history[0].role === "system") {
-      history[0].content = SYSTEM_PROMPT;
-    }
-  }
-
-  if (history.length > 11) {
-    history = [history[0], ...history.slice(-10)];
-  }
-
-  await Chat.addMessage(sessionId, "user", mensajeUsuario);
-  history.push({ role: "user", content: mensajeUsuario });
+  const prompts = {
+    CONSENTIMIENTO: `¿El usuario acepta la política? JSON: {"valido": true, "valor": true/false}. Mensaje: "${mensajeUsuario}"`,
+    NOMBRE: `Extrae el nombre identificativo de la persona. JSON: {"valido": true, "valor": "Nombre"}. Mensaje: "${mensajeUsuario}"`,
+    COMENSALES: `Extrae el número de personas. JSON: {"valido": true, "valor": (entero)}. Mensaje: "${mensajeUsuario}"`,
+    FECHA: `Mapea el día solicitado a YYYY-MM-DD usando este calendario:\n${calendarioMapeo}\nREGLA: Si la fecha cae en Lunes o pide un Lunes explícitamente, DEVUELVE {"valido": false, "es_faq": true, "respuesta_faq": "Los lunes cerramos por descanso del personal. ¿Qué otro día te viene bien?"}. JSON éxito: {"valido": true, "valor": "YYYY-MM-DD"}. Mensaje: "${mensajeUsuario}"`,
+    HORA: `Extrae la hora a formato 24h. REGLA CRÍTICA: Solo aceptamos horas entre 13:00-16:00 y 20:00-23:30. Si pide hora fuera de rango, DEVUELVE {"valido": false, "es_faq": true, "respuesta_faq": "Esa hora está fuera de nuestro horario. Abrimos de 13:00 a 16:00 y de 20:00 a 23:30. ¿A qué hora te apunto?"}. JSON éxito: {"valido": true, "valor": "HH:MM"}. Mensaje: "${mensajeUsuario}"`,
+    ZONA: `Prefiere 'Terraza' o 'Sala'. JSON: {"valido": true, "valor": "Terraza" o "Sala"}. Mensaje: "${mensajeUsuario}"`,
+  };
 
   try {
-    const chatCompletion = await groq.chat.completions.create({
-      messages: history,
-      model: "llama-3.1-8b-instant",
+    const response = await groq.chat.completions.create({
+      messages: [
+        {
+          role: "system",
+          content: `Eres un parser ultra-estricto. Tu única salida es un objeto JSON válido.
+          REGLA 1: Si extraes el dato y cumple las reglas, devuelve {"valido": true, "valor": "..."}.
+          REGLA 2: Si el usuario hace una pregunta sobre horarios, días de cierre o ubicación en lugar de dar el dato, devuelve {"valido": false, "es_faq": true, "respuesta_faq": "Respuesta breve a su duda."}. 
+          INFO FAQs: Horarios (13:00-16:00 y 20:00-23:30). Cerramos los Lunes. Ubicación (Av. Caffarena 13, Málaga).
+          REGLA 3: Si falta el dato, es inválido o incomprensible, devuelve {"valido": false}.`,
+        },
+        { role: "user", content: prompts[tipoEntidad] },
+      ],
+      model: "llama-3.3-70b-versatile",
       temperature: 0.0,
-      top_p: 0.1,
       response_format: { type: "json_object" },
     });
 
-    const respuestaIA = chatCompletion.choices[0]?.message?.content || "{}";
-    const parsedResponse = JSON.parse(respuestaIA);
-
-    if (parsedResponse.status === "COMPLETED" && parsedResponse.datos) {
-      return {
-        esJson: true,
-        datos: parsedResponse.datos,
-        sessionId,
-      };
-    } else {
-      const textoRespuesta =
-        parsedResponse.respuesta_usuario ||
-        "Dime, ¿en qué puedo ayudarte con tu reserva?";
-      await Chat.addMessage(sessionId, "assistant", textoRespuesta);
-
-      return {
-        esJson: false,
-        mensaje: textoRespuesta,
-        sessionId,
-      };
-    }
+    const rawJson =
+      response.choices[0]?.message?.content || '{"valido": false}';
+    console.log(`[🤖 Groq -> ${tipoEntidad}]:`, rawJson);
+    return JSON.parse(rawJson);
   } catch (error) {
-    console.error("[Groq Error]:", error);
-    return {
-      esJson: false,
-      mensaje:
-        "Tengo un problema técnico de conexión en este instante. ¿Me lo puedes repetir?",
-      sessionId,
-    };
+    console.error("[Groq Extractor Error]:", error);
+    return { valido: false };
   }
 };
