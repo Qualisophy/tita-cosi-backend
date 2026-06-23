@@ -1,4 +1,3 @@
-// src/services/chatbot.service.js
 import Groq from "groq-sdk";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -31,7 +30,10 @@ export const extraerEntidad = async (mensajeUsuario, tipoEntidad) => {
     NOMBRE: `Extrae el nombre identificativo de la persona. JSON: {"valido": true, "valor": "Nombre"}. Mensaje: "${mensajeUsuario}"`,
     COMENSALES: `Extrae el número de personas. JSON: {"valido": true, "valor": (entero)}. Mensaje: "${mensajeUsuario}"`,
     FECHA: `Mapea el día solicitado a YYYY-MM-DD usando este calendario:\n${calendarioMapeo}\nREGLA: Si la fecha cae en Lunes o pide un Lunes explícitamente, DEVUELVE {"valido": false, "es_faq": true, "respuesta_faq": "Los lunes cerramos por descanso del personal. ¿Qué otro día te viene bien?"}. JSON éxito: {"valido": true, "valor": "YYYY-MM-DD"}. Mensaje: "${mensajeUsuario}"`,
-    HORA: `Extrae la hora a formato 24h. REGLA CRÍTICA: Solo aceptamos horas entre 13:00-16:00 y 20:00-23:30. Si pide hora fuera de rango, DEVUELVE {"valido": false, "es_faq": true, "respuesta_faq": "Esa hora está fuera de nuestro horario. Abrimos de 13:00 a 16:00 y de 20:00 a 23:30. ¿A qué hora te apunto?"}. JSON éxito: {"valido": true, "valor": "HH:MM"}. Mensaje: "${mensajeUsuario}"`,
+    HORA: `PASO 1: Convierte la hora a formato 24h (Ej: "a las 11 de la noche" -> "23:00", "23" -> "23:00").
+    PASO 2: Rango válido estricto: 13:00 a 16:00 y 20:00 a 23:30 (incluyendo 21:00, 22:00, 23:00 explícitamente). Si está fuera, DEVUELVE {"valido": false, "es_faq": true, "respuesta_faq": "Esa hora está fuera de nuestro horario de cocina (13:00 a 16:00 y 20:00 a 23:30). ¿A qué hora te apunto?"}.
+    PASO 3: VÍA DE ESCAPE: Si el usuario no dice una hora, sino que intenta cambiar de zona (ej: "mejor en la sala", "en terraza"), DEVUELVE {"valido": false, "cambio_zona": true, "nueva_zona": "Sala" o "Terraza"}.
+    JSON éxito: {"valido": true, "valor": "HH:MM"}. Mensaje: "${mensajeUsuario}"`,
     ZONA: `Prefiere 'Terraza' o 'Sala'. JSON: {"valido": true, "valor": "Terraza" o "Sala"}. Mensaje: "${mensajeUsuario}"`,
   };
 

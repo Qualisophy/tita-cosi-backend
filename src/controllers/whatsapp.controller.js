@@ -1,4 +1,3 @@
-// src/controllers/whatsapp.controller.js
 import Reserva from "../models/reserva.model.js";
 import Chat from "../models/chat.model.js";
 import { extraerEntidad } from "../services/chatbot.service.js";
@@ -74,12 +73,15 @@ const procesarReservaFinal = async (sessionId, numeroCliente, temp_data) => {
 
   const prefijoMesa = payloadReserva.zona === "Terraza" ? "T" : "S";
   let mesaAsignada = null;
+  let existeCapacidadAforo = false;
 
+  // 1. Verificar si existe físicamente una mesa que soporte este aforo
   for (const [id_mesa, capacidad] of Object.entries(MESAS_CAPACIDAD)) {
     if (
       id_mesa.startsWith(prefijoMesa) &&
       capacidad >= payloadReserva.comensales
     ) {
+      existeCapacidadAforo = true;
       const libre = await Reserva.checkAvailability(
         payloadReserva.fecha,
         payloadReserva.hora,
@@ -92,6 +94,16 @@ const procesarReservaFinal = async (sessionId, numeroCliente, temp_data) => {
     }
   }
 
+  // Si el grupo es demasiado grande para las mesas online
+  if (!existeCapacidadAforo) {
+    await Chat.deleteSession(numeroCliente);
+    return enviarMensajeWhatsApp(
+      numeroCliente,
+      `Lo siento ${temp_data.nombre}, nuestra capacidad máxima online para una sola mesa en la ${temp_data.zona} es inferior a ${temp_data.comensales} personas. Por favor, llámanos directamente al local para gestionar reservas de grupos grandes.`,
+    );
+  }
+
+  // Si el grupo cabe, pero todas las mesas grandes están ocupadas a esa hora
   if (!mesaAsignada) {
     delete temp_data.hora;
     await Chat.updateSessionData(sessionId, "AWAITING_HORA", temp_data);
@@ -103,9 +115,36 @@ const procesarReservaFinal = async (sessionId, numeroCliente, temp_data) => {
 
   payloadReserva.mesa_id = mesaAsignada;
 
-  // Última red de seguridad (fallback por si el LLM dejó pasar algo anómalo)
   const errorValidacion = await validarReglasNegocio(payloadReserva);
   if (errorValidacion) {
+    if (
+      errorValidacion.includes("correo") ||
+      errorValidacion.includes("dominio")
+    ) {
+      delete temp_data.email;
+      await Chat.updateSessionData(sessionId, "AWAITING_EMAIL", temp_data);
+      return enviarMensajeWhatsApp(
+        numeroCliente,
+        `Tenemos un problema: ${errorValidacion} Por favor, facilítame un correo electrónico diferente.`,
+      );
+    }
+    if (errorValidacion.includes("lunes")) {
+      delete temp_data.fecha;
+      await Chat.updateSessionData(sessionId, "AWAITING_FECHA", temp_data);
+      return enviarMensajeWhatsApp(
+        numeroCliente,
+        `¡Vaya! 😅 Los lunes cerramos por descanso del personal. ¿Qué otro día te vendría bien?`,
+      );
+    }
+    if (errorValidacion.includes("horario")) {
+      delete temp_data.hora;
+      await Chat.updateSessionData(sessionId, "AWAITING_HORA", temp_data);
+      return enviarMensajeWhatsApp(
+        numeroCliente,
+        `Esa hora está fuera de nuestro horario de cocina (13:00 a 16:00 y 20:00 a 23:30). ¿A qué otra HORA te gustaría venir?`,
+      );
+    }
+
     delete temp_data.fecha;
     delete temp_data.hora;
     await Chat.updateSessionData(sessionId, "AWAITING_FECHA", temp_data);
@@ -327,6 +366,16 @@ export const receiveMessage = async (req, res) => {
               numeroCliente,
               extraccionHora.respuesta_faq,
             );
+
+          // Vía de escape: Cambio de contexto de zona
+          if (extraccionHora.cambio_zona) {
+            temp_data.zona = extraccionHora.nueva_zona;
+            return enviarMensajeWhatsApp(
+              numeroCliente,
+              `Entendido, modificado a la ${extraccionHora.nueva_zona}. ¿A qué HORA te gustaría la mesa?`,
+            );
+          }
+
           if (extraccionHora.valido) {
             temp_data.hora = extraccionHora.valor;
             return avanzarFSM(session.id, numeroCliente, temp_data);
@@ -353,7 +402,6 @@ export const receiveMessage = async (req, res) => {
           );
 
         case "AWAITING_EMAIL":
-          // Las validaciones directas no pasan por IA, pero mantenemos la lógica limpia
           const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
           if (emailRegex.test(textoCliente)) {
             temp_data.email = textoCliente;
