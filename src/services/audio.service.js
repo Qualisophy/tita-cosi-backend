@@ -1,9 +1,8 @@
 import fs from "fs";
 import Groq from "groq-sdk";
-import { pipeline } from "stream/promises";
+import * as googleTTS from "google-tts-api";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const HF_TOKEN = process.env.HUGGINGFACE_API_KEY;
 
 export const transcribirAudio = async (filePath) => {
   try {
@@ -22,28 +21,22 @@ export const transcribirAudio = async (filePath) => {
 
 export const generarVoz = async (texto, outputPath) => {
   try {
-    const MODEL_URL =
-      "https://api-inference.huggingface.co/models/facebook/mms-tts-spa";
-
-    const response = await fetch(MODEL_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${HF_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ inputs: texto }),
+    // Google TTS public endpoint (Gratis, sin API Key, sin registros)
+    const base64Audio = await googleTTS.getAudioBase64(texto, {
+      lang: "es",
+      slow: false,
+      host: "https://translate.google.com",
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Error de HF: ${response.status} - ${errorText}`);
-    }
+    const buffer = Buffer.from(base64Audio, "base64");
+    fs.writeFileSync(outputPath, buffer);
 
-    const fileStream = fs.createWriteStream(outputPath);
-    await pipeline(response.body, fileStream);
     return outputPath;
   } catch (error) {
-    console.error("[TTS Error] Fallo al generar voz con Hugging Face:", error);
+    console.error(
+      "[TTS Error] Fallo al generar voz con Google TTS:",
+      error.message,
+    );
     return null;
   }
 };

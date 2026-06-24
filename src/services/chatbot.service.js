@@ -35,6 +35,7 @@ export const extraerEntidad = async (mensajeUsuario, tipoEntidad) => {
     PASO 3: VÍA DE ESCAPE: Si el usuario no dice una hora, sino que intenta cambiar de zona (ej: "mejor en la sala", "en terraza"), DEVUELVE {"valido": false, "cambio_zona": true, "nueva_zona": "Sala" o "Terraza"}.
     JSON éxito: {"valido": true, "valor": "HH:MM"}. Mensaje: "${mensajeUsuario}"`,
     ZONA: `Prefiere 'Terraza' o 'Sala'. JSON: {"valido": true, "valor": "Terraza" o "Sala"}. Mensaje: "${mensajeUsuario}"`,
+    EMAIL: `Extrae el correo electrónico. REGLAS: Si el usuario lo dicta con palabras (ej: "arroba", "punto"), sustitúyelas por los símbolos "@" y ".". Elimina TODOS los espacios en blanco. Si no detectas un correo, devuelve false. JSON éxito: {"valido": true, "valor": "correo@dominio.com"}. Mensaje: "${mensajeUsuario}"`,
   };
 
   try {

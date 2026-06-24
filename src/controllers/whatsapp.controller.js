@@ -15,6 +15,9 @@ const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_ID = process.env.WHATSAPP_PHONE_ID;
 
+// Caché para evitar Webhooks duplicados de Meta (Soluciona la condición de carrera)
+const processedMessages = new Set();
+
 const enviarMensajeWhatsApp = async (
   numeroDestino,
   texto,
@@ -27,26 +30,39 @@ const enviarMensajeWhatsApp = async (
       to: numeroDestino,
     };
 
+    let usarFallbackTexto = true;
+
     if (responderConAudio) {
-      const tempPath = path.resolve(`./uploads/tts_${Date.now()}.wav`);
-      await generarVoz(texto, tempPath);
-      const mediaId = await subirMediaMeta(tempPath);
+      // Filtramos el texto SOLO para el audio: quitamos emojis y contenido entre paréntesis
+      // para que el bot sea conciso, no lea "Ejota", ni "Cañón de confeti".
+      const textoParaAudio = texto
+        .replace(/🎉/g, "")
+        .replace(/😅/g, "")
+        .replace(/\(.*?\)/g, "")
+        .replace(/\*/g, "")
+        .trim();
 
-      if (mediaId) {
-        payloadMessage.type = "audio";
-        payloadMessage.audio = { id: mediaId };
-      } else {
-        // Fallback a texto si falla la subida
-        payloadMessage.type = "text";
-        payloadMessage.text = { body: texto };
-      }
+      const tempPath = path.resolve(`./uploads/tts_${Date.now()}.mp3`);
+      const rutaAudioGenerado = await generarVoz(textoParaAudio, tempPath);
 
-      if (fs.existsSync(tempPath)) {
-        fs.unlink(tempPath, (err) => {
-          if (err) console.error("[WA API] Error borrando TTS temporal:", err);
+      if (rutaAudioGenerado && fs.existsSync(rutaAudioGenerado)) {
+        const mediaId = await subirMediaMeta(rutaAudioGenerado);
+
+        if (mediaId) {
+          payloadMessage.type = "audio";
+          payloadMessage.audio = { id: mediaId };
+          usarFallbackTexto = false;
+        } else {
+          console.warn("⚠️ [WA API] Falló la subida a Meta. Fallback a texto.");
+        }
+
+        fs.unlink(rutaAudioGenerado, (err) => {
+          if (err) console.error("🗑️ [FS] Error borrando TTS temporal:", err);
         });
       }
-    } else {
+    }
+
+    if (usarFallbackTexto) {
       payloadMessage.type = "text";
       payloadMessage.text = { body: texto };
     }
@@ -106,7 +122,7 @@ const procesarReservaFinal = async (
     fecha: temp_data.fecha,
     hora: temp_data.hora,
     comensales: Number(temp_data.comensales),
-    zona: temp_data.zona === "Terraza" ? "Terraza" : "Comedor",
+    zona: temp_data.zona === "Terraza" ? "Terraza" : "Sala", // FIX: Era 'Comedor' y rompía el ENUM
     notas: temp_data.notas,
     mesa_id: null,
   };
@@ -197,29 +213,40 @@ const procesarReservaFinal = async (
     );
   }
 
-  const insertId = await Reserva.create(payloadReserva);
-  if (process.env.MAKE_WEBHOOK_RESERVA_URL) {
-    fetch(process.env.MAKE_WEBHOOK_RESERVA_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        reservaId: insertId,
-        ...payloadReserva,
-        tipo_formulario: "reserva",
-      }),
-    }).catch((err) => console.error("Error webhook Make:", err));
-  }
+  try {
+    const insertId = await Reserva.create(payloadReserva);
 
-  await Chat.deleteSession(numeroCliente);
-  const fechaLimpia = formatearFechaEsp(temp_data.fecha);
-  console.log(
-    `[✅ FSM FINALIZADA] Reserva de ${temp_data.nombre} guardada exitosamente.`,
-  );
-  return enviarMensajeWhatsApp(
-    numeroCliente,
-    `¡Reserva confirmada, ${temp_data.nombre}! 🎉 Te esperamos el ${fechaLimpia} a las ${temp_data.hora} en ${temp_data.zona}. Te hemos enviado un correo. (Escribe 'CANCELAR' si necesitas anularla).`,
-    responderConAudio,
-  );
+    if (process.env.MAKE_WEBHOOK_RESERVA_URL) {
+      fetch(process.env.MAKE_WEBHOOK_RESERVA_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reservaId: insertId,
+          ...payloadReserva,
+          tipo_formulario: "reserva",
+        }),
+      }).catch((err) => console.error("Error webhook Make:", err));
+    }
+
+    await Chat.deleteSession(numeroCliente);
+    const fechaLimpia = formatearFechaEsp(temp_data.fecha);
+    console.log(
+      `[✅ FSM FINALIZADA] Reserva de ${temp_data.nombre} guardada exitosamente.`,
+    );
+
+    return enviarMensajeWhatsApp(
+      numeroCliente,
+      `¡Reserva confirmada, ${temp_data.nombre}! 🎉 Te esperamos el ${fechaLimpia} a las ${temp_data.hora} en ${temp_data.zona}. Te hemos enviado un correo. (Escribe 'CANCELAR' si necesitas anularla).`,
+      responderConAudio,
+    );
+  } catch (error) {
+    console.error("❌ Error DB guardando reserva:", error);
+    return enviarMensajeWhatsApp(
+      numeroCliente,
+      "Ha ocurrido un error interno guardando la reserva. Por favor, inténtalo de nuevo.",
+      responderConAudio,
+    );
+  }
 };
 
 const avanzarFSM = async (
@@ -271,9 +298,14 @@ const avanzarFSM = async (
   }
   if (!temp_data.email) {
     await Chat.updateSessionData(sessionId, "AWAITING_EMAIL", temp_data);
+
+    const mensajeEmail = responderConAudio
+      ? "Para enviarte el resguardo, facilítame un correo electrónico. Por mayor precisión, te recomiendo que me lo escribas en un mensaje de texto."
+      : "Para enviarte el resguardo, facilítame un correo electrónico válido.";
+
     return enviarMensajeWhatsApp(
       numeroCliente,
-      "Para enviarte el resguardo, facilítame un correo electrónico válido.",
+      mensajeEmail,
       responderConAudio,
     );
   }
@@ -302,6 +334,15 @@ export const receiveMessage = async (req, res) => {
     const message = body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
 
     if (message && (message.type === "text" || message.type === "audio")) {
+      // FIX: Ignorar webhooks duplicados de Meta
+      if (processedMessages.has(message.id)) {
+        console.log(`[WA] Ignorando webhook duplicado de Meta: ${message.id}`);
+        return;
+      }
+      processedMessages.add(message.id);
+      // Limpiamos caché a los 5 minutos para no saturar memoria
+      setTimeout(() => processedMessages.delete(message.id), 5 * 60 * 1000);
+
       const numeroCliente = message.from;
       let textoCliente = "";
       let esAudio = false;
@@ -338,14 +379,10 @@ export const receiveMessage = async (req, res) => {
       );
 
       if (
-        textoCliente === "cancelar" ||
+        textoCliente.includes("cancelar") ||
         textoCliente.includes("borrar mis datos")
       ) {
-        const queryBusqueda = `
-          SELECT id FROM reservas 
-          WHERE telefono_cliente = ? AND CONCAT(fecha, ' ', hora) > NOW() AND estado != 'Cancelada' 
-          ORDER BY created_at DESC LIMIT 1
-        `;
+        const queryBusqueda = `SELECT id FROM reservas WHERE telefono_cliente = ? AND CONCAT(fecha, ' ', hora) > NOW() AND estado != 'Cancelada' ORDER BY created_at DESC LIMIT 1`;
         const [reservaFutura] = await db.query(queryBusqueda, [numeroCliente]);
 
         if (reservaFutura.length > 0) {
@@ -370,8 +407,6 @@ export const receiveMessage = async (req, res) => {
       let { step, temp_data } = session;
       temp_data =
         typeof temp_data === "string" ? JSON.parse(temp_data) : temp_data || {};
-
-      console.log(`🔄 [FSM Estado]: ${step}`);
 
       switch (step) {
         case "AWAITING_CONSENT":
@@ -468,7 +503,6 @@ export const receiveMessage = async (req, res) => {
               extraccionHora.respuesta_faq,
               esAudio,
             );
-
           if (extraccionHora.cambio_zona) {
             temp_data.zona = extraccionHora.nueva_zona;
             return enviarMensajeWhatsApp(
@@ -477,7 +511,6 @@ export const receiveMessage = async (req, res) => {
               esAudio,
             );
           }
-
           if (extraccionHora.valido) {
             temp_data.hora = extraccionHora.valor;
             return avanzarFSM(session.id, numeroCliente, temp_data, esAudio);
@@ -507,14 +540,20 @@ export const receiveMessage = async (req, res) => {
           );
 
         case "AWAITING_EMAIL":
-          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-          if (emailRegex.test(textoCliente)) {
-            temp_data.email = textoCliente;
-            return avanzarFSM(session.id, numeroCliente, temp_data, esAudio);
+          const extraccionEmail = await extraerEntidad(textoCliente, "EMAIL");
+          if (extraccionEmail.valido) {
+            const emailLimpio = extraccionEmail.valor
+              .replace(/\s+/g, "")
+              .toLowerCase();
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (emailRegex.test(emailLimpio)) {
+              temp_data.email = emailLimpio;
+              return avanzarFSM(session.id, numeroCliente, temp_data, esAudio);
+            }
           }
           return enviarMensajeWhatsApp(
             numeroCliente,
-            "El formato del correo no parece válido. Por favor, revísalo (ej. correo@gmail.com).",
+            "No he podido captar bien el correo o el formato es inválido. ¿Podrías repetirlo o escribirlo? (ej. correo@gmail.com).",
             esAudio,
           );
 

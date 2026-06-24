@@ -1,4 +1,6 @@
 // src/index.js
+import dns from "node:dns";
+dns.setDefaultResultOrder("ipv4first");
 import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
@@ -15,7 +17,7 @@ import categoriaRoutes from "./routes/categoria.routes.js";
 import productoRoutes from "./routes/producto.routes.js";
 import reservaRoutes from "./routes/reserva.routes.js";
 import contactoRoutes from "./routes/contacto.routes.js";
-import whatsappRoutes from "./routes/whatsapp.routes.js"; // <-- NUEVA IMPORTACIÓN
+import whatsappRoutes from "./routes/whatsapp.routes.js";
 
 // Cargar variables de entorno
 dotenv.config();

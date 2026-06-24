@@ -29,10 +29,11 @@ export const descargarMediaMeta = async (mediaId, outputPath) => {
 export const subirMediaMeta = async (filePath) => {
   try {
     const fileBuffer = fs.readFileSync(filePath);
-    const blob = new Blob([fileBuffer], { type: "audio/wav" });
+    // Cambiamos el MIME type a audio/mpeg (formato nativo de MP3 para Meta)
+    const blob = new Blob([fileBuffer], { type: "audio/mpeg" });
 
     const formData = new FormData();
-    formData.append("file", blob, "audio.wav");
+    formData.append("file", blob, "audio.mp3");
     formData.append("type", "audio");
     formData.append("messaging_product", "whatsapp");
 
