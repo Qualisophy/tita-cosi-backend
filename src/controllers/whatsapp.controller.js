@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import Reserva from "../models/reserva.model.js";
 import Chat from "../models/chat.model.js";
-import { extraerEntidad } from "../services/chatbot.service.js";
+import { extraerDatosReserva } from "../services/chatbot.service.js"; // FIX: Nueva importación
 import { validarReglasNegocio, MESAS_CAPACIDAD } from "./reserva.controller.js";
 import db from "../config/db.js";
 import { transcribirAudio, generarVoz } from "../services/audio.service.js";
@@ -34,7 +34,6 @@ const enviarMensajeWhatsApp = async (
 
     if (responderConAudio) {
       // Filtramos el texto SOLO para el audio: quitamos emojis y contenido entre paréntesis
-      // para que el bot sea conciso, no lea "Ejota", ni "Cañón de confeti".
       const textoParaAudio = texto
         .replace(/🎉/g, "")
         .replace(/😅/g, "")
@@ -122,7 +121,7 @@ const procesarReservaFinal = async (
     fecha: temp_data.fecha,
     hora: temp_data.hora,
     comensales: Number(temp_data.comensales),
-    zona: temp_data.zona === "Terraza" ? "Terraza" : "Sala", // FIX: Era 'Comedor' y rompía el ENUM
+    zona: temp_data.zona === "Terraza" ? "Terraza" : "Sala",
     notas: temp_data.notas,
     mesa_id: null,
   };
@@ -160,7 +159,7 @@ const procesarReservaFinal = async (
 
   if (!mesaAsignada) {
     delete temp_data.hora;
-    await Chat.updateSessionData(sessionId, "AWAITING_HORA", temp_data);
+    await Chat.updateSessionData(sessionId, "GATHERING_INFO", temp_data); // FIX: Ajustado al nuevo estado
     return enviarMensajeWhatsApp(
       numeroCliente,
       `Lo siento ${temp_data.nombre}, no disponemos de mesas libres para ${temp_data.comensales} personas en la ${temp_data.zona} a esa hora. Por favor, indícame una HORA diferente.`,
@@ -177,7 +176,7 @@ const procesarReservaFinal = async (
       errorValidacion.includes("dominio")
     ) {
       delete temp_data.email;
-      await Chat.updateSessionData(sessionId, "AWAITING_EMAIL", temp_data);
+      await Chat.updateSessionData(sessionId, "GATHERING_INFO", temp_data);
       return enviarMensajeWhatsApp(
         numeroCliente,
         `Tenemos un problema: ${errorValidacion} Por favor, facilítame un correo electrónico diferente.`,
@@ -186,7 +185,7 @@ const procesarReservaFinal = async (
     }
     if (errorValidacion.includes("lunes")) {
       delete temp_data.fecha;
-      await Chat.updateSessionData(sessionId, "AWAITING_FECHA", temp_data);
+      await Chat.updateSessionData(sessionId, "GATHERING_INFO", temp_data);
       return enviarMensajeWhatsApp(
         numeroCliente,
         `¡Vaya! 😅 Los lunes cerramos por descanso del personal. ¿Qué otro día te vendría bien?`,
@@ -195,7 +194,7 @@ const procesarReservaFinal = async (
     }
     if (errorValidacion.includes("horario")) {
       delete temp_data.hora;
-      await Chat.updateSessionData(sessionId, "AWAITING_HORA", temp_data);
+      await Chat.updateSessionData(sessionId, "GATHERING_INFO", temp_data);
       return enviarMensajeWhatsApp(
         numeroCliente,
         `Esa hora está fuera de nuestro horario de cocina (13:00 a 16:00 y 20:00 a 23:30). ¿A qué otra HORA te gustaría venir?`,
@@ -205,7 +204,7 @@ const procesarReservaFinal = async (
 
     delete temp_data.fecha;
     delete temp_data.hora;
-    await Chat.updateSessionData(sessionId, "AWAITING_FECHA", temp_data);
+    await Chat.updateSessionData(sessionId, "GATHERING_INFO", temp_data);
     return enviarMensajeWhatsApp(
       numeroCliente,
       `Tenemos un conflicto: ${errorValidacion} Por favor, indícame una FECHA diferente.`,
@@ -217,6 +216,9 @@ const procesarReservaFinal = async (
     const insertId = await Reserva.create(payloadReserva);
 
     if (process.env.MAKE_WEBHOOK_RESERVA_URL) {
+      console.log(
+        `[Make.com] Disparando Webhook a ${process.env.MAKE_WEBHOOK_RESERVA_URL}...`,
+      );
       fetch(process.env.MAKE_WEBHOOK_RESERVA_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -225,7 +227,12 @@ const procesarReservaFinal = async (
           ...payloadReserva,
           tipo_formulario: "reserva",
         }),
-      }).catch((err) => console.error("Error webhook Make:", err));
+      })
+        .then((res) => res.text())
+        .then((text) => console.log(`✅ [Make.com] Respuesta del CRM: ${text}`))
+        .catch((err) =>
+          console.error("❌ [Make.com] Error disparando webhook:", err),
+        );
     }
 
     await Chat.deleteSession(numeroCliente);
@@ -255,8 +262,9 @@ const avanzarFSM = async (
   temp_data,
   responderConAudio = false,
 ) => {
+  // CHECKLIST: Se detiene en el primer dato que falte
   if (!temp_data.nombre) {
-    await Chat.updateSessionData(sessionId, "AWAITING_NOMBRE", temp_data);
+    await Chat.updateSessionData(sessionId, "GATHERING_INFO", temp_data);
     return enviarMensajeWhatsApp(
       numeroCliente,
       "¡Perfecto! Para empezar, ¿a nombre de quién hacemos la reserva?",
@@ -264,7 +272,7 @@ const avanzarFSM = async (
     );
   }
   if (!temp_data.comensales) {
-    await Chat.updateSessionData(sessionId, "AWAITING_COMENSALES", temp_data);
+    await Chat.updateSessionData(sessionId, "GATHERING_INFO", temp_data);
     return enviarMensajeWhatsApp(
       numeroCliente,
       `Encantado, ${temp_data.nombre}. ¿Para cuántas personas será la reserva?`,
@@ -272,7 +280,7 @@ const avanzarFSM = async (
     );
   }
   if (!temp_data.fecha) {
-    await Chat.updateSessionData(sessionId, "AWAITING_FECHA", temp_data);
+    await Chat.updateSessionData(sessionId, "GATHERING_INFO", temp_data);
     return enviarMensajeWhatsApp(
       numeroCliente,
       "¿Qué día te gustaría venir? (Ej: Hoy, mañana, o el próximo viernes)",
@@ -280,7 +288,7 @@ const avanzarFSM = async (
     );
   }
   if (!temp_data.hora) {
-    await Chat.updateSessionData(sessionId, "AWAITING_HORA", temp_data);
+    await Chat.updateSessionData(sessionId, "GATHERING_INFO", temp_data);
     const fechaLimpia = formatearFechaEsp(temp_data.fecha);
     return enviarMensajeWhatsApp(
       numeroCliente,
@@ -289,7 +297,7 @@ const avanzarFSM = async (
     );
   }
   if (!temp_data.zona) {
-    await Chat.updateSessionData(sessionId, "AWAITING_ZONA", temp_data);
+    await Chat.updateSessionData(sessionId, "GATHERING_INFO", temp_data);
     return enviarMensajeWhatsApp(
       numeroCliente,
       "¿Prefieres la mesa en la Sala o en la Terraza?",
@@ -297,12 +305,10 @@ const avanzarFSM = async (
     );
   }
   if (!temp_data.email) {
-    await Chat.updateSessionData(sessionId, "AWAITING_EMAIL", temp_data);
-
+    await Chat.updateSessionData(sessionId, "GATHERING_INFO", temp_data);
     const mensajeEmail = responderConAudio
       ? "Para enviarte el resguardo, facilítame un correo electrónico. Por mayor precisión, te recomiendo que me lo escribas en un mensaje de texto."
       : "Para enviarte el resguardo, facilítame un correo electrónico válido.";
-
     return enviarMensajeWhatsApp(
       numeroCliente,
       mensajeEmail,
@@ -310,7 +316,7 @@ const avanzarFSM = async (
     );
   }
   if (temp_data.notas === undefined) {
-    await Chat.updateSessionData(sessionId, "AWAITING_NOTAS", temp_data);
+    await Chat.updateSessionData(sessionId, "GATHERING_INFO", temp_data);
     return enviarMensajeWhatsApp(
       numeroCliente,
       "¿Tenéis alguna alergia, intolerancia o petición especial? (Si no es el caso, escribe 'No')",
@@ -318,6 +324,7 @@ const avanzarFSM = async (
     );
   }
 
+  // Si pasa toda la checklist, la reserva está lista para cerrarse
   return procesarReservaFinal(
     sessionId,
     numeroCliente,
@@ -334,13 +341,12 @@ export const receiveMessage = async (req, res) => {
     const message = body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
 
     if (message && (message.type === "text" || message.type === "audio")) {
-      // FIX: Ignorar webhooks duplicados de Meta
+      // Ignorar webhooks duplicados de Meta
       if (processedMessages.has(message.id)) {
         console.log(`[WA] Ignorando webhook duplicado de Meta: ${message.id}`);
         return;
       }
       processedMessages.add(message.id);
-      // Limpiamos caché a los 5 minutos para no saturar memoria
       setTimeout(() => processedMessages.delete(message.id), 5 * 60 * 1000);
 
       const numeroCliente = message.from;
@@ -408,11 +414,13 @@ export const receiveMessage = async (req, res) => {
       temp_data =
         typeof temp_data === "string" ? JSON.parse(temp_data) : temp_data || {};
 
+      console.log(`🔄 [FSM Estado]: ${step}`);
+
       switch (step) {
         case "AWAITING_CONSENT":
-          const extraccionConsentimiento = await extraerEntidad(
+          const extraccionConsentimiento = await extraerDatosReserva(
             textoCliente,
-            "CONSENTIMIENTO",
+            "AWAITING_CONSENT",
           );
           if (extraccionConsentimiento.es_faq)
             return enviarMensajeWhatsApp(
@@ -427,138 +435,64 @@ export const receiveMessage = async (req, res) => {
               await Chat.deleteSession(numeroCliente);
               return enviarMensajeWhatsApp(
                 numeroCliente,
-                "Entendido. Si cambias de opinión, aquí estaré. ¡Buen día!",
+                "Lo entiendo perfectamente. Si en algún momento cambias de opinión, aquí estaré encantado de ayudarte. ¡Que tengas un día estupendo!",
                 esAudio,
               );
             }
           }
           return enviarMensajeWhatsApp(
             numeroCliente,
-            "¡Hola! Soy el asistente virtual automatizado de Taberna Tita Cosi (IA). Para gestionar tu reserva necesitamos tratar tus datos según nuestra Política de Privacidad (https://tita-cosi.vercel.app/es/privacidad). ¿Aceptas los términos para continuar? (Sí / No)",
+            "¡Hola! 👋 Qué alegría saludarte. Soy el asistente de Taberna Tita Cosi. Para poder tomar nota de tu reserva y prepararlo todo, necesitamos tratar tus datos según nuestra Política de Privacidad (https://tita-cosi.vercel.app/es/privacidad). ¿Aceptas los términos para que empecemos? 😊",
             esAudio,
           );
 
-        case "AWAITING_NOMBRE":
-          const extraccionNombre = await extraerEntidad(textoCliente, "NOMBRE");
-          if (extraccionNombre.es_faq)
-            return enviarMensajeWhatsApp(
-              numeroCliente,
-              extraccionNombre.respuesta_faq,
-              esAudio,
-            );
-          if (extraccionNombre.valido) {
-            temp_data.nombre = extraccionNombre.valor;
-            return avanzarFSM(session.id, numeroCliente, temp_data, esAudio);
-          }
-          return enviarMensajeWhatsApp(
-            numeroCliente,
-            "¿Podrías darme tu nombre para la reserva?",
-            esAudio,
-          );
-
+        // Nuevo estado unificado (Slot Filling)
+        default:
+        case "GATHERING_INFO":
+        case "AWAITING_NOMBRE": // Fallbacks por si habían sesiones en BD antiguas
         case "AWAITING_COMENSALES":
-          const extraccionComensales = await extraerEntidad(
-            textoCliente,
-            "COMENSALES",
-          );
-          if (extraccionComensales.es_faq)
-            return enviarMensajeWhatsApp(
-              numeroCliente,
-              extraccionComensales.respuesta_faq,
-              esAudio,
-            );
-          if (extraccionComensales.valido) {
-            temp_data.comensales = extraccionComensales.valor;
-            return avanzarFSM(session.id, numeroCliente, temp_data, esAudio);
-          }
-          return enviarMensajeWhatsApp(
-            numeroCliente,
-            "No he logrado entender el número. Por favor, indícame solo con un número cuántas personas seréis.",
-            esAudio,
-          );
-
         case "AWAITING_FECHA":
-          const extraccionFecha = await extraerEntidad(textoCliente, "FECHA");
-          if (extraccionFecha.es_faq)
-            return enviarMensajeWhatsApp(
-              numeroCliente,
-              extraccionFecha.respuesta_faq,
-              esAudio,
-            );
-          if (extraccionFecha.valido) {
-            temp_data.fecha = extraccionFecha.valor;
-            return avanzarFSM(session.id, numeroCliente, temp_data, esAudio);
-          }
-          return enviarMensajeWhatsApp(
-            numeroCliente,
-            "Por favor, indícame una fecha válida futura (ej: mañana, el viernes, o 25/06).",
-            esAudio,
-          );
-
         case "AWAITING_HORA":
-          const extraccionHora = await extraerEntidad(textoCliente, "HORA");
-          if (extraccionHora.es_faq)
-            return enviarMensajeWhatsApp(
-              numeroCliente,
-              extraccionHora.respuesta_faq,
-              esAudio,
-            );
-          if (extraccionHora.cambio_zona) {
-            temp_data.zona = extraccionHora.nueva_zona;
-            return enviarMensajeWhatsApp(
-              numeroCliente,
-              `Entendido, modificado a la ${extraccionHora.nueva_zona}. ¿A qué HORA te gustaría la mesa?`,
-              esAudio,
-            );
-          }
-          if (extraccionHora.valido) {
-            temp_data.hora = extraccionHora.valor;
-            return avanzarFSM(session.id, numeroCliente, temp_data, esAudio);
-          }
-          return enviarMensajeWhatsApp(
-            numeroCliente,
-            "No he entendido la hora. Por favor, indícalo en formato 24h (ej: 14:30 o 21:00).",
-            esAudio,
-          );
-
         case "AWAITING_ZONA":
-          const extraccionZona = await extraerEntidad(textoCliente, "ZONA");
-          if (extraccionZona.es_faq)
-            return enviarMensajeWhatsApp(
-              numeroCliente,
-              extraccionZona.respuesta_faq,
-              esAudio,
-            );
-          if (extraccionZona.valido) {
-            temp_data.zona = extraccionZona.valor;
-            return avanzarFSM(session.id, numeroCliente, temp_data, esAudio);
-          }
-          return enviarMensajeWhatsApp(
-            numeroCliente,
-            "Por favor, indícame si prefieres 'Sala' o 'Terraza'.",
-            esAudio,
+        case "AWAITING_EMAIL":
+        case "AWAITING_NOTAS":
+          const extraccion = await extraerDatosReserva(
+            textoCliente,
+            "GATHERING_INFO",
           );
 
-        case "AWAITING_EMAIL":
-          const extraccionEmail = await extraerEntidad(textoCliente, "EMAIL");
-          if (extraccionEmail.valido) {
-            const emailLimpio = extraccionEmail.valor
-              .replace(/\s+/g, "")
-              .toLowerCase();
-            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-            if (emailRegex.test(emailLimpio)) {
-              temp_data.email = emailLimpio;
-              return avanzarFSM(session.id, numeroCliente, temp_data, esAudio);
+          if (extraccion.es_faq) {
+            return enviarMensajeWhatsApp(
+              numeroCliente,
+              extraccion.respuesta_faq,
+              esAudio,
+            );
+          }
+
+          // Fusión Dinámica de Datos extraídos en este mensaje con los que ya teníamos
+          if (extraccion.datos) {
+            Object.keys(extraccion.datos).forEach((key) => {
+              if (extraccion.datos[key] !== null) {
+                if (key === "email") {
+                  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                  if (emailRegex.test(extraccion.datos[key])) {
+                    temp_data[key] = extraccion.datos[key];
+                  }
+                } else {
+                  temp_data[key] = extraccion.datos[key];
+                }
+              }
+            });
+
+            if (
+              textoCliente.match(/\b(no|ninguna|ninguno)\b/i) &&
+              !temp_data.notas
+            ) {
+              temp_data.notas = "Ninguna";
             }
           }
-          return enviarMensajeWhatsApp(
-            numeroCliente,
-            "No he podido captar bien el correo o el formato es inválido. ¿Podrías repetirlo o escribirlo? (ej. correo@gmail.com).",
-            esAudio,
-          );
 
-        case "AWAITING_NOTAS":
-          temp_data.notas = textoCliente === "no" ? "Ninguna" : textoCliente;
+          // Volvemos a pasar por la checklist para ver si ya tenemos todo
           return avanzarFSM(session.id, numeroCliente, temp_data, esAudio);
       }
     }

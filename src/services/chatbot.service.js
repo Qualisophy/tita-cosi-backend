@@ -2,7 +2,7 @@ import Groq from "groq-sdk";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-export const extraerEntidad = async (mensajeUsuario, tipoEntidad) => {
+export const extraerDatosReserva = async (mensajeUsuario, estadoActual) => {
   const hoy = new Date();
   const opcionesISO = { timeZone: "Europe/Madrid" };
   const dias = [
@@ -20,36 +20,76 @@ export const extraerEntidad = async (mensajeUsuario, tipoEntidad) => {
       const d = new Date(hoy);
       d.setDate(d.getDate() + i);
       const iso = d.toLocaleString("sv-SE", opcionesISO).split(" ")[0];
-      const diaAyerHoyManana = i === 0 ? "(hoy)" : i === 1 ? "(mañana)" : "";
-      return `- ${dias[d.getDay()]} ${d.getDate()}: ${iso} ${diaAyerHoyManana}`;
+      const diaExtra = i === 0 ? "(hoy)" : i === 1 ? "(mañana)" : "";
+      return `- ${dias[d.getDay()]} ${d.getDate()}: ${iso} ${diaExtra}`;
     })
     .join("\n");
 
-  const prompts = {
-    CONSENTIMIENTO: `¿El usuario acepta la política? JSON: {"valido": true, "valor": true/false}. Mensaje: "${mensajeUsuario}"`,
-    NOMBRE: `Extrae el nombre identificativo de la persona. JSON: {"valido": true, "valor": "Nombre"}. Mensaje: "${mensajeUsuario}"`,
-    COMENSALES: `Extrae el número de personas. JSON: {"valido": true, "valor": (entero)}. Mensaje: "${mensajeUsuario}"`,
-    FECHA: `Mapea el día solicitado a YYYY-MM-DD usando este calendario:\n${calendarioMapeo}\nREGLA: Si la fecha cae en Lunes o pide un Lunes explícitamente, DEVUELVE {"valido": false, "es_faq": true, "respuesta_faq": "Los lunes cerramos por descanso del personal. ¿Qué otro día te viene bien?"}. JSON éxito: {"valido": true, "valor": "YYYY-MM-DD"}. Mensaje: "${mensajeUsuario}"`,
-    HORA: `PASO 1: Convierte la hora a formato 24h (Ej: "a las 11 de la noche" -> "23:00", "23" -> "23:00").
-    PASO 2: Rango válido estricto: 13:00 a 16:00 y 20:00 a 23:30 (incluyendo 21:00, 22:00, 23:00 explícitamente). Si está fuera, DEVUELVE {"valido": false, "es_faq": true, "respuesta_faq": "Esa hora está fuera de nuestro horario de cocina (13:00 a 16:00 y 20:00 a 23:30). ¿A qué hora te apunto?"}.
-    PASO 3: VÍA DE ESCAPE: Si el usuario no dice una hora, sino que intenta cambiar de zona (ej: "mejor en la sala", "en terraza"), DEVUELVE {"valido": false, "cambio_zona": true, "nueva_zona": "Sala" o "Terraza"}.
-    JSON éxito: {"valido": true, "valor": "HH:MM"}. Mensaje: "${mensajeUsuario}"`,
-    ZONA: `Prefiere 'Terraza' o 'Sala'. JSON: {"valido": true, "valor": "Terraza" o "Sala"}. Mensaje: "${mensajeUsuario}"`,
-    EMAIL: `Extrae el correo electrónico. REGLAS: Si el usuario lo dicta con palabras (ej: "arroba", "punto"), sustitúyelas por los símbolos "@" y ".". Elimina TODOS los espacios en blanco. Si no detectas un correo, devuelve false. JSON éxito: {"valido": true, "valor": "correo@dominio.com"}. Mensaje: "${mensajeUsuario}"`,
-  };
+  if (estadoActual === "AWAITING_CONSENT") {
+    return extraerConsentimientoUnico(mensajeUsuario);
+  }
 
+  // Quitamos validaciones de negocio. Groq SOLO extrae.
+  const systemPrompt = `Eres el parser de reservas de Taberna Tita Cosi. Analiza el mensaje y extrae los datos.
+  REGLA 0: NUNCA INVENTES DATOS. Si un dato no se menciona explícitamente, su valor en el JSON DEBE SER null.
+  REGLA 1: Formateo estricto: fecha en YYYY-MM-DD usando este calendario:\n${calendarioMapeo}\nhora en HH:MM (pasa de formato 12h a 24h, ej. "2 de la tarde" = "14:00"). zona debe ser "Sala" o "Terraza".
+  REGLA 2: Si dicta un email, sustituye "arroba" por "@", "punto" por "." y elimina espacios.
+  REGLA 3: Si el usuario hace una pregunta, pon es_faq en true y responde amablemente en respuesta_faq.
+  
+  Salida JSON estricta:
+  {
+    "es_faq": false,
+    "respuesta_faq": null,
+    "datos": {
+      "nombre": null,
+      "comensales": null,
+      "fecha": null,
+      "hora": null,
+      "zona": null,
+      "email": null,
+      "notas": null
+    }
+  }`;
+
+  try {
+    const response = await groq.chat.completions.create({
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `Mensaje: "${mensajeUsuario}"` },
+      ],
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.0,
+      response_format: { type: "json_object" },
+    });
+
+    const rawJson = response.choices[0]?.message?.content || "{}";
+    console.log(`[🤖 Groq -> Slot Filling]:`, rawJson);
+    return JSON.parse(rawJson);
+  } catch (error) {
+    console.error("[Groq Extractor Error]:", error);
+    return { datos: {} };
+  }
+};
+
+const extraerConsentimientoUnico = async (mensajeUsuario) => {
   try {
     const response = await groq.chat.completions.create({
       messages: [
         {
           role: "system",
-          content: `Eres un parser ultra-estricto. Tu única salida es un objeto JSON válido.
-          REGLA 1: Si extraes el dato y cumple las reglas, devuelve {"valido": true, "valor": "..."}.
-          REGLA 2: Si el usuario hace una pregunta sobre horarios, días de cierre o ubicación en lugar de dar el dato, devuelve {"valido": false, "es_faq": true, "respuesta_faq": "Respuesta breve a su duda."}. 
-          INFO FAQs: Horarios (13:00-16:00 y 20:00-23:30). Cerramos los Lunes. Ubicación (Av. Caffarena 13, Málaga).
-          REGLA 3: Si falta el dato, es inválido o incomprensible, devuelve {"valido": false}.`,
+          content: `Analiza si el usuario acepta la política de privacidad. Responde ÚNICAMENTE con este formato JSON:
+        {
+          "valido": true, 
+          "valor": true, 
+          "es_faq": false, 
+          "respuesta_faq": null
+        }
+        REGLAS:
+        - Si acepta, "valor": true y "valido": true.
+        - Si rechaza, "valor": false y "valido": true.
+        - Si el usuario dice otra cosa o ignora la pregunta para dar sus datos (ej: "mesa para dos"), "valido": false, "es_faq": true y en "respuesta_faq" pídele de forma MUY CÁLIDA, CERCANA Y AMABLE que, para poder ayudarle a gestionar su reserva con cariño, necesitas que te confirme primero que acepta la política de privacidad.`,
         },
-        { role: "user", content: prompts[tipoEntidad] },
+        { role: "user", content: `Mensaje: "${mensajeUsuario}"` },
       ],
       model: "llama-3.3-70b-versatile",
       temperature: 0.0,
@@ -58,10 +98,10 @@ export const extraerEntidad = async (mensajeUsuario, tipoEntidad) => {
 
     const rawJson =
       response.choices[0]?.message?.content || '{"valido": false}';
-    console.log(`[🤖 Groq -> ${tipoEntidad}]:`, rawJson);
+    console.log(`[🤖 Groq -> CONSENTIMIENTO]:`, rawJson);
     return JSON.parse(rawJson);
   } catch (error) {
-    console.error("[Groq Extractor Error]:", error);
+    console.error("Error en extraerConsentimientoUnico:", error);
     return { valido: false };
   }
 };
