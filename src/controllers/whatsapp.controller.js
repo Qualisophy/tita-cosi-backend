@@ -1,16 +1,56 @@
+import fs from "fs";
+import path from "path";
 import Reserva from "../models/reserva.model.js";
 import Chat from "../models/chat.model.js";
 import { extraerEntidad } from "../services/chatbot.service.js";
 import { validarReglasNegocio, MESAS_CAPACIDAD } from "./reserva.controller.js";
 import db from "../config/db.js";
+import { transcribirAudio, generarVoz } from "../services/audio.service.js";
+import {
+  descargarMediaMeta,
+  subirMediaMeta,
+} from "../services/meta.service.js";
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_ID = process.env.WHATSAPP_PHONE_ID;
 
-const enviarMensajeWhatsApp = async (numeroDestino, texto) => {
+const enviarMensajeWhatsApp = async (
+  numeroDestino,
+  texto,
+  responderConAudio = false,
+) => {
   if (!texto) return;
   try {
+    let payloadMessage = {
+      messaging_product: "whatsapp",
+      to: numeroDestino,
+    };
+
+    if (responderConAudio) {
+      const tempPath = path.resolve(`./uploads/tts_${Date.now()}.wav`);
+      await generarVoz(texto, tempPath);
+      const mediaId = await subirMediaMeta(tempPath);
+
+      if (mediaId) {
+        payloadMessage.type = "audio";
+        payloadMessage.audio = { id: mediaId };
+      } else {
+        // Fallback a texto si falla la subida
+        payloadMessage.type = "text";
+        payloadMessage.text = { body: texto };
+      }
+
+      if (fs.existsSync(tempPath)) {
+        fs.unlink(tempPath, (err) => {
+          if (err) console.error("[WA API] Error borrando TTS temporal:", err);
+        });
+      }
+    } else {
+      payloadMessage.type = "text";
+      payloadMessage.text = { body: texto };
+    }
+
     const response = await fetch(
       `https://graph.facebook.com/v25.0/${PHONE_ID}/messages`,
       {
@@ -19,12 +59,7 @@ const enviarMensajeWhatsApp = async (numeroDestino, texto) => {
           Authorization: `Bearer ${WHATSAPP_TOKEN}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          to: numeroDestino,
-          type: "text",
-          text: { body: texto },
-        }),
+        body: JSON.stringify(payloadMessage),
       },
     );
     const data = await response.json();
@@ -58,7 +93,12 @@ const formatearFechaEsp = (fechaISO) => {
   return new Date(fechaISO).toLocaleDateString("es-ES", opciones);
 };
 
-const procesarReservaFinal = async (sessionId, numeroCliente, temp_data) => {
+const procesarReservaFinal = async (
+  sessionId,
+  numeroCliente,
+  temp_data,
+  responderConAudio = false,
+) => {
   const payloadReserva = {
     nombre_cliente: temp_data.nombre,
     email_cliente: temp_data.email,
@@ -75,7 +115,6 @@ const procesarReservaFinal = async (sessionId, numeroCliente, temp_data) => {
   let mesaAsignada = null;
   let existeCapacidadAforo = false;
 
-  // 1. Verificar si existe físicamente una mesa que soporte este aforo
   for (const [id_mesa, capacidad] of Object.entries(MESAS_CAPACIDAD)) {
     if (
       id_mesa.startsWith(prefijoMesa) &&
@@ -94,22 +133,22 @@ const procesarReservaFinal = async (sessionId, numeroCliente, temp_data) => {
     }
   }
 
-  // Si el grupo es demasiado grande para las mesas online
   if (!existeCapacidadAforo) {
     await Chat.deleteSession(numeroCliente);
     return enviarMensajeWhatsApp(
       numeroCliente,
       `Lo siento ${temp_data.nombre}, nuestra capacidad máxima online para una sola mesa en la ${temp_data.zona} es inferior a ${temp_data.comensales} personas. Por favor, llámanos directamente al local para gestionar reservas de grupos grandes.`,
+      responderConAudio,
     );
   }
 
-  // Si el grupo cabe, pero todas las mesas grandes están ocupadas a esa hora
   if (!mesaAsignada) {
     delete temp_data.hora;
     await Chat.updateSessionData(sessionId, "AWAITING_HORA", temp_data);
     return enviarMensajeWhatsApp(
       numeroCliente,
       `Lo siento ${temp_data.nombre}, no disponemos de mesas libres para ${temp_data.comensales} personas en la ${temp_data.zona} a esa hora. Por favor, indícame una HORA diferente.`,
+      responderConAudio,
     );
   }
 
@@ -126,6 +165,7 @@ const procesarReservaFinal = async (sessionId, numeroCliente, temp_data) => {
       return enviarMensajeWhatsApp(
         numeroCliente,
         `Tenemos un problema: ${errorValidacion} Por favor, facilítame un correo electrónico diferente.`,
+        responderConAudio,
       );
     }
     if (errorValidacion.includes("lunes")) {
@@ -134,6 +174,7 @@ const procesarReservaFinal = async (sessionId, numeroCliente, temp_data) => {
       return enviarMensajeWhatsApp(
         numeroCliente,
         `¡Vaya! 😅 Los lunes cerramos por descanso del personal. ¿Qué otro día te vendría bien?`,
+        responderConAudio,
       );
     }
     if (errorValidacion.includes("horario")) {
@@ -142,6 +183,7 @@ const procesarReservaFinal = async (sessionId, numeroCliente, temp_data) => {
       return enviarMensajeWhatsApp(
         numeroCliente,
         `Esa hora está fuera de nuestro horario de cocina (13:00 a 16:00 y 20:00 a 23:30). ¿A qué otra HORA te gustaría venir?`,
+        responderConAudio,
       );
     }
 
@@ -151,6 +193,7 @@ const procesarReservaFinal = async (sessionId, numeroCliente, temp_data) => {
     return enviarMensajeWhatsApp(
       numeroCliente,
       `Tenemos un conflicto: ${errorValidacion} Por favor, indícame una FECHA diferente.`,
+      responderConAudio,
     );
   }
 
@@ -175,15 +218,22 @@ const procesarReservaFinal = async (sessionId, numeroCliente, temp_data) => {
   return enviarMensajeWhatsApp(
     numeroCliente,
     `¡Reserva confirmada, ${temp_data.nombre}! 🎉 Te esperamos el ${fechaLimpia} a las ${temp_data.hora} en ${temp_data.zona}. Te hemos enviado un correo. (Escribe 'CANCELAR' si necesitas anularla).`,
+    responderConAudio,
   );
 };
 
-const avanzarFSM = async (sessionId, numeroCliente, temp_data) => {
+const avanzarFSM = async (
+  sessionId,
+  numeroCliente,
+  temp_data,
+  responderConAudio = false,
+) => {
   if (!temp_data.nombre) {
     await Chat.updateSessionData(sessionId, "AWAITING_NOMBRE", temp_data);
     return enviarMensajeWhatsApp(
       numeroCliente,
       "¡Perfecto! Para empezar, ¿a nombre de quién hacemos la reserva?",
+      responderConAudio,
     );
   }
   if (!temp_data.comensales) {
@@ -191,6 +241,7 @@ const avanzarFSM = async (sessionId, numeroCliente, temp_data) => {
     return enviarMensajeWhatsApp(
       numeroCliente,
       `Encantado, ${temp_data.nombre}. ¿Para cuántas personas será la reserva?`,
+      responderConAudio,
     );
   }
   if (!temp_data.fecha) {
@@ -198,6 +249,7 @@ const avanzarFSM = async (sessionId, numeroCliente, temp_data) => {
     return enviarMensajeWhatsApp(
       numeroCliente,
       "¿Qué día te gustaría venir? (Ej: Hoy, mañana, o el próximo viernes)",
+      responderConAudio,
     );
   }
   if (!temp_data.hora) {
@@ -206,13 +258,15 @@ const avanzarFSM = async (sessionId, numeroCliente, temp_data) => {
     return enviarMensajeWhatsApp(
       numeroCliente,
       `Apuntado el ${fechaLimpia}. ¿A qué hora prefieres? (Horario: 13:00 a 16:00 y 20:00 a 23:30)`,
+      responderConAudio,
     );
   }
   if (!temp_data.zona) {
     await Chat.updateSessionData(sessionId, "AWAITING_ZONA", temp_data);
     return enviarMensajeWhatsApp(
       numeroCliente,
-      "¿Prefieres la mesa en la *Sala* o en la *Terraza*?",
+      "¿Prefieres la mesa en la Sala o en la Terraza?",
+      responderConAudio,
     );
   }
   if (!temp_data.email) {
@@ -220,6 +274,7 @@ const avanzarFSM = async (sessionId, numeroCliente, temp_data) => {
     return enviarMensajeWhatsApp(
       numeroCliente,
       "Para enviarte el resguardo, facilítame un correo electrónico válido.",
+      responderConAudio,
     );
   }
   if (temp_data.notas === undefined) {
@@ -227,10 +282,16 @@ const avanzarFSM = async (sessionId, numeroCliente, temp_data) => {
     return enviarMensajeWhatsApp(
       numeroCliente,
       "¿Tenéis alguna alergia, intolerancia o petición especial? (Si no es el caso, escribe 'No')",
+      responderConAudio,
     );
   }
 
-  return procesarReservaFinal(sessionId, numeroCliente, temp_data);
+  return procesarReservaFinal(
+    sessionId,
+    numeroCliente,
+    temp_data,
+    responderConAudio,
+  );
 };
 
 export const receiveMessage = async (req, res) => {
@@ -240,11 +301,41 @@ export const receiveMessage = async (req, res) => {
     const body = req.body;
     const message = body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
 
-    if (message && message.type === "text") {
+    if (message && (message.type === "text" || message.type === "audio")) {
       const numeroCliente = message.from;
-      const textoCliente = message.text.body.trim().toLowerCase();
+      let textoCliente = "";
+      let esAudio = false;
 
-      console.log(`\n💬 [WA] Nuevo Mensaje: "${textoCliente}"`);
+      if (message.type === "audio") {
+        esAudio = true;
+        const mediaId = message.audio.id;
+        const tempAudioPath = path.resolve(`./uploads/${mediaId}.ogg`);
+
+        console.log(`🎤 [WA] Descargando audio de cliente...`);
+        const downloadSuccess = await descargarMediaMeta(
+          mediaId,
+          tempAudioPath,
+        );
+
+        if (downloadSuccess) {
+          textoCliente = await transcribirAudio(tempAudioPath);
+          if (fs.existsSync(tempAudioPath)) fs.unlinkSync(tempAudioPath);
+        }
+
+        if (!textoCliente) {
+          return enviarMensajeWhatsApp(
+            numeroCliente,
+            "Disculpa, no he podido escuchar bien el audio. ¿Podrías repetirlo o escribirlo?",
+            true,
+          );
+        }
+      } else {
+        textoCliente = message.text.body.trim().toLowerCase();
+      }
+
+      console.log(
+        `\n💬 [WA] Nuevo Mensaje (Audio: ${esAudio}): "${textoCliente}"`,
+      );
 
       if (
         textoCliente === "cancelar" ||
@@ -271,6 +362,7 @@ export const receiveMessage = async (req, res) => {
         return enviarMensajeWhatsApp(
           numeroCliente,
           "Proceso cancelado. Tu reserva activa (si la había) ha sido anulada en nuestro sistema y tus datos de sesión borrados. ¡Hasta pronto!",
+          esAudio,
         );
       }
 
@@ -291,21 +383,24 @@ export const receiveMessage = async (req, res) => {
             return enviarMensajeWhatsApp(
               numeroCliente,
               extraccionConsentimiento.respuesta_faq,
+              esAudio,
             );
           if (extraccionConsentimiento.valido) {
             if (extraccionConsentimiento.valor === true) {
-              return avanzarFSM(session.id, numeroCliente, temp_data);
+              return avanzarFSM(session.id, numeroCliente, temp_data, esAudio);
             } else {
               await Chat.deleteSession(numeroCliente);
               return enviarMensajeWhatsApp(
                 numeroCliente,
                 "Entendido. Si cambias de opinión, aquí estaré. ¡Buen día!",
+                esAudio,
               );
             }
           }
           return enviarMensajeWhatsApp(
             numeroCliente,
             "¡Hola! Soy el asistente virtual automatizado de Taberna Tita Cosi (IA). Para gestionar tu reserva necesitamos tratar tus datos según nuestra Política de Privacidad (https://tita-cosi.vercel.app/es/privacidad). ¿Aceptas los términos para continuar? (Sí / No)",
+            esAudio,
           );
 
         case "AWAITING_NOMBRE":
@@ -314,14 +409,16 @@ export const receiveMessage = async (req, res) => {
             return enviarMensajeWhatsApp(
               numeroCliente,
               extraccionNombre.respuesta_faq,
+              esAudio,
             );
           if (extraccionNombre.valido) {
             temp_data.nombre = extraccionNombre.valor;
-            return avanzarFSM(session.id, numeroCliente, temp_data);
+            return avanzarFSM(session.id, numeroCliente, temp_data, esAudio);
           }
           return enviarMensajeWhatsApp(
             numeroCliente,
             "¿Podrías darme tu nombre para la reserva?",
+            esAudio,
           );
 
         case "AWAITING_COMENSALES":
@@ -333,14 +430,16 @@ export const receiveMessage = async (req, res) => {
             return enviarMensajeWhatsApp(
               numeroCliente,
               extraccionComensales.respuesta_faq,
+              esAudio,
             );
           if (extraccionComensales.valido) {
             temp_data.comensales = extraccionComensales.valor;
-            return avanzarFSM(session.id, numeroCliente, temp_data);
+            return avanzarFSM(session.id, numeroCliente, temp_data, esAudio);
           }
           return enviarMensajeWhatsApp(
             numeroCliente,
             "No he logrado entender el número. Por favor, indícame solo con un número cuántas personas seréis.",
+            esAudio,
           );
 
         case "AWAITING_FECHA":
@@ -349,14 +448,16 @@ export const receiveMessage = async (req, res) => {
             return enviarMensajeWhatsApp(
               numeroCliente,
               extraccionFecha.respuesta_faq,
+              esAudio,
             );
           if (extraccionFecha.valido) {
             temp_data.fecha = extraccionFecha.valor;
-            return avanzarFSM(session.id, numeroCliente, temp_data);
+            return avanzarFSM(session.id, numeroCliente, temp_data, esAudio);
           }
           return enviarMensajeWhatsApp(
             numeroCliente,
             "Por favor, indícame una fecha válida futura (ej: mañana, el viernes, o 25/06).",
+            esAudio,
           );
 
         case "AWAITING_HORA":
@@ -365,24 +466,26 @@ export const receiveMessage = async (req, res) => {
             return enviarMensajeWhatsApp(
               numeroCliente,
               extraccionHora.respuesta_faq,
+              esAudio,
             );
 
-          // Vía de escape: Cambio de contexto de zona
           if (extraccionHora.cambio_zona) {
             temp_data.zona = extraccionHora.nueva_zona;
             return enviarMensajeWhatsApp(
               numeroCliente,
               `Entendido, modificado a la ${extraccionHora.nueva_zona}. ¿A qué HORA te gustaría la mesa?`,
+              esAudio,
             );
           }
 
           if (extraccionHora.valido) {
             temp_data.hora = extraccionHora.valor;
-            return avanzarFSM(session.id, numeroCliente, temp_data);
+            return avanzarFSM(session.id, numeroCliente, temp_data, esAudio);
           }
           return enviarMensajeWhatsApp(
             numeroCliente,
             "No he entendido la hora. Por favor, indícalo en formato 24h (ej: 14:30 o 21:00).",
+            esAudio,
           );
 
         case "AWAITING_ZONA":
@@ -391,30 +494,33 @@ export const receiveMessage = async (req, res) => {
             return enviarMensajeWhatsApp(
               numeroCliente,
               extraccionZona.respuesta_faq,
+              esAudio,
             );
           if (extraccionZona.valido) {
             temp_data.zona = extraccionZona.valor;
-            return avanzarFSM(session.id, numeroCliente, temp_data);
+            return avanzarFSM(session.id, numeroCliente, temp_data, esAudio);
           }
           return enviarMensajeWhatsApp(
             numeroCliente,
             "Por favor, indícame si prefieres 'Sala' o 'Terraza'.",
+            esAudio,
           );
 
         case "AWAITING_EMAIL":
           const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
           if (emailRegex.test(textoCliente)) {
             temp_data.email = textoCliente;
-            return avanzarFSM(session.id, numeroCliente, temp_data);
+            return avanzarFSM(session.id, numeroCliente, temp_data, esAudio);
           }
           return enviarMensajeWhatsApp(
             numeroCliente,
             "El formato del correo no parece válido. Por favor, revísalo (ej. correo@gmail.com).",
+            esAudio,
           );
 
         case "AWAITING_NOTAS":
           temp_data.notas = textoCliente === "no" ? "Ninguna" : textoCliente;
-          return avanzarFSM(session.id, numeroCliente, temp_data);
+          return avanzarFSM(session.id, numeroCliente, temp_data, esAudio);
       }
     }
   } catch (error) {
