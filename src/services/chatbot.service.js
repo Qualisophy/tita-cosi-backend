@@ -87,7 +87,7 @@ const extraerConsentimientoUnico = async (mensajeUsuario) => {
         REGLAS:
         - Si acepta, "valor": true y "valido": true.
         - Si rechaza, "valor": false y "valido": true.
-        - Si el usuario dice otra cosa o ignora la pregunta para dar sus datos (ej: "mesa para dos"), "valido": false, "es_faq": true y en "respuesta_faq" pídele de forma MUY CÁLIDA, CERCANA Y AMABLE que, para poder ayudarle a gestionar su reserva con cariño, necesitas que te confirme primero que acepta la política de privacidad.`,
+        - Si el usuario dice otra cosa o ignora la pregunta para dar sus datos (ej: "mesa para dos"), "valido": false, "es_faq": true y en "respuesta_faq" pídele que, para poder ayudarle y asegurarnos de que sus datos estén protegidos, necesitas que le confirme que acepta nuestra política de privacidad (https://tita-cosi.vercel.app/es/privacidad). ¿Podría por favor confirmarme que la acepta?`,
         },
         { role: "user", content: `Mensaje: "${mensajeUsuario}"` },
       ],

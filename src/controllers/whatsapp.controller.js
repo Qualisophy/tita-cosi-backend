@@ -442,7 +442,7 @@ export const receiveMessage = async (req, res) => {
           }
           return enviarMensajeWhatsApp(
             numeroCliente,
-            "¡Hola! 👋 Qué alegría saludarte. Soy el asistente de Taberna Tita Cosi. Para poder tomar nota de tu reserva y prepararlo todo, necesitamos tratar tus datos según nuestra Política de Privacidad (https://tita-cosi.vercel.app/es/privacidad). ¿Aceptas los términos para que empecemos? 😊",
+            "¡Hola! Me alegra que estés interesado en hacer una reserva. Para poder ayudarte y asegurarnos de que tus datos estén protegidos, necesito que me confirmes que aceptas nuestra política de privacidad (https://tita-cosi.vercel.app/es/privacidad). ¿Podrías por favor confirmarme que la aceptas?",
             esAudio,
           );
 
