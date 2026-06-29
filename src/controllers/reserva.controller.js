@@ -6,7 +6,7 @@ import { promisify } from "util";
 const resolveMx = promisify(dns.resolveMx);
 
 // Diccionario estático de mesas para validación cruzada backend
-const MESAS_CAPACIDAD = {
+export const MESAS_CAPACIDAD = {
   S1: 2,
   S2: 2,
   S3: 2,
@@ -32,7 +32,8 @@ const verificarDominioCorreo = async (email) => {
   }
 };
 
-const validarReglasNegocio = async (datos) => {
+// Validador central del negocio
+export const validarReglasNegocio = async (datos) => {
   const {
     fecha,
     hora,
@@ -63,7 +64,6 @@ const validarReglasNegocio = async (datos) => {
     }
   }
 
-  // NUEVO: Validación de Capacidad de la Mesa vs Comensales
   if (!comensales || comensales < 1 || comensales > 20) {
     return "El número de comensales debe estar entre 1 y 20 personas.";
   }
@@ -80,6 +80,10 @@ const validarReglasNegocio = async (datos) => {
   const ahora = new Date();
   const horaFormateada = hora.length === 5 ? `${hora}:00` : hora;
   const fechaReservaCombinada = new Date(`${fecha}T${horaFormateada}`);
+
+  if (fechaReservaCombinada.getDay() === 1) {
+    return "La taberna permanece cerrada por descanso del personal todos los lunes. Por favor, selecciona otro día de la semana.";
+  }
 
   if (fechaReservaCombinada < ahora) {
     return "No es posible programar o modificar una reserva para una fecha u hora que ya ha pasado.";
@@ -162,7 +166,7 @@ export const createReserva = async (req, res) => {
       });
     }
 
-    const { fecha, hora, mesa_id } = req.body;
+    const { fecha, hora, mesa_id, estado } = req.body;
 
     const isAvailable = await Reserva.checkAvailability(fecha, hora, mesa_id);
     if (!isAvailable) {
@@ -174,10 +178,14 @@ export const createReserva = async (req, res) => {
       });
     }
 
+    // El modelo ahora maneja el estado dinámicamente
     const id = await Reserva.create(req.body);
 
     const makeWebhookUrl = process.env.MAKE_WEBHOOK_RESERVA_URL;
     if (makeWebhookUrl) {
+      // Determinamos el estado final con el que se guardó
+      const estadoFinal = estado || "Pendiente";
+
       const payloadMake = {
         reservaId: id,
         nombre_cliente: req.body.nombre_cliente,
@@ -189,15 +197,15 @@ export const createReserva = async (req, res) => {
         mesa_id: req.body.mesa_id,
         zona: req.body.zona,
         notas: req.body.notas || "Sin peticiones especiales",
+        // Si el admin la crea confirmada, enviamos directo por la ruta de confirmación
+        tipo_formulario:
+          estadoFinal === "Confirmada" ? "confirmacion_admin" : "reserva",
       };
 
       fetch(makeWebhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...payloadMake,
-          tipo_formulario: "reserva",
-        }),
+        body: JSON.stringify(payloadMake),
       }).catch((err) => {
         console.error(
           "Error al enviar webhook de reserva a Make:",
@@ -209,7 +217,7 @@ export const createReserva = async (req, res) => {
     res.status(201).json({
       success: true,
       data: { reservaId: id },
-      message: "Reserva confirmada con éxito",
+      message: "Reserva registrada con éxito",
     });
   } catch (error) {
     console.error("Error creando reserva:", error);
@@ -226,7 +234,17 @@ export const updateReserva = async (req, res) => {
     const { id } = req.params;
     const { fecha, hora, mesa_id, estado } = req.body;
 
-    if (estado !== "Cancelada") {
+    // 1. Obtener la reserva actual para comparar estados y construir el payload seguro
+    const reservaExistente = await Reserva.getById(id);
+    if (!reservaExistente) {
+      return res.status(404).json({
+        success: false,
+        data: null,
+        message: "Reserva no encontrada",
+      });
+    }
+
+    if (estado && estado !== "Cancelada") {
       const errorValidacion = await validarReglasNegocio(req.body);
       if (errorValidacion) {
         return res.status(400).json({
@@ -259,6 +277,44 @@ export const updateReserva = async (req, res) => {
         data: null,
         message: "Reserva no encontrada o no se pudo aplicar la actualización",
       });
+    }
+
+    // 2. Lógica de Disparador para Make.com (Solo transición hacia "Confirmada")
+    if (reservaExistente.estado !== "Confirmada" && estado === "Confirmada") {
+      const makeWebhookUrl = process.env.MAKE_WEBHOOK_RESERVA_URL;
+
+      if (makeWebhookUrl) {
+        const payloadMake = {
+          reservaId: id,
+          nombre_cliente:
+            req.body.nombre_cliente || reservaExistente.nombre_cliente,
+          email_cliente:
+            req.body.email_cliente || reservaExistente.email_cliente,
+          telefono_cliente:
+            req.body.telefono_cliente || reservaExistente.telefono_cliente,
+          fecha: req.body.fecha || reservaExistente.fecha,
+          hora: req.body.hora || reservaExistente.hora,
+          comensales: req.body.comensales || reservaExistente.comensales,
+          mesa_id: req.body.mesa_id || reservaExistente.mesa_id,
+          zona: req.body.zona || reservaExistente.zona,
+          notas:
+            req.body.notas ||
+            reservaExistente.notas ||
+            "Sin peticiones especiales",
+          tipo_formulario: "confirmacion_admin", // <--- LA CLAVE PARA EL ROUTER
+        };
+
+        fetch(makeWebhookUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payloadMake),
+        }).catch((err) => {
+          console.error(
+            "Error al enviar webhook de confirmación a Make:",
+            err.message,
+          );
+        });
+      }
     }
 
     res.json({
