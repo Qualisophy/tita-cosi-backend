@@ -16,7 +16,7 @@ const Reserva = {
     return rows[0];
   },
 
-  // 3. Crear una nueva reserva
+  // 3. Crear una nueva reserva (Acepta estado dinámico, por defecto 'Pendiente')
   create: async (datosReserva) => {
     const {
       nombre_cliente,
@@ -28,12 +28,16 @@ const Reserva = {
       mesa_id,
       zona,
       notas,
+      estado, // <-- Añadido soporte para estado dinámico
     } = datosReserva;
+
+    // Resolvemos el estado: si el admin envía 'Confirmada', se usa; si la web no envía nada, es 'Pendiente'
+    const estadoFinal = estado || "Pendiente";
 
     const [result] = await db.query(
       `INSERT INTO reservas 
       (nombre_cliente, email_cliente, telefono_cliente, fecha, hora, comensales, mesa_id, zona, notas, estado) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Confirmada')`,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         nombre_cliente,
         email_cliente,
@@ -44,6 +48,7 @@ const Reserva = {
         mesa_id,
         zona,
         notas || null,
+        estadoFinal,
       ],
     );
 
